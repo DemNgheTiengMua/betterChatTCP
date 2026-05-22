@@ -40,6 +40,12 @@ public partial class FileTransferItem : ObservableObject
     [ObservableProperty]
     private bool _isOwn;
 
+    [ObservableProperty]
+    private string _p2PAddress = string.Empty;
+
+    [ObservableProperty]
+    private int _p2PPort;
+
     public string SizeText => FormatFileSize(FileSize);
     public bool IsBusy => Status is FileTransferUiStatus.Uploading or FileTransferUiStatus.Downloading;
     public bool CanDownload => Status == FileTransferUiStatus.Available;

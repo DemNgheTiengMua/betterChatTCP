@@ -94,6 +94,8 @@ namespace ChatServer
         public string FileName { get; set; } = string.Empty;
         public long FileSize { get; set; }
         public string CreatedAt { get; set; } = string.Empty;
+        public string P2PAddress { get; set; } = string.Empty;
+        public int P2PPort { get; set; }
     }
     public class FileAvailableData
     {
@@ -101,6 +103,8 @@ namespace ChatServer
         public string RoomId { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public long FileSize { get; set; }
+        public string P2PAddress { get; set; } = string.Empty;
+        public int P2PPort { get; set; }
     }
     public class FileTransferFailedData
     {
@@ -131,6 +135,8 @@ namespace ChatServer
         public string FileName { get; set; } = string.Empty;
         public long FileSize { get; set; }
         public string CreatedAt { get; set; } = string.Empty;
+        public string P2PAddress { get; set; } = string.Empty;
+        public int P2PPort { get; set; }
     }
 
     public class FileListResponseData
@@ -621,12 +627,18 @@ namespace ChatServer
                                     Sender = transferRecord.Sender,
                                     FileName = transferRecord.SafeFileName,
                                     FileSize = transferRecord.FileSize,
-                                    CreatedAt = DateTime.Now.ToString("o")
+                                    CreatedAt = DateTime.Now.ToString("o"),
+                                    P2PAddress = transferRecord.P2PAddress,
+                                    P2PPort = transferRecord.P2PPort
                                 })
                             };
 
                             LogInfo($"[FILE] Offer registered: {transferRecord.TransferId} from {transferRecord.Sender} in {transferRecord.RoomId}");
-                            _ = ExpirePendingFileOfferAsync(transferRecord.TransferId, PendingFileOfferTimeout);
+                            if (string.IsNullOrWhiteSpace(transferRecord.P2PAddress))
+                            {
+                                _ = ExpirePendingFileOfferAsync(transferRecord.TransferId, PendingFileOfferTimeout);
+                            }
+                            
                             if (transferRecord.RoomId.Equals("General", StringComparison.OrdinalIgnoreCase))
                             {
                                 await _clients.BroadcastAsync(responsePacket);
@@ -651,7 +663,9 @@ namespace ChatServer
                                 Sender = r.Sender,
                                 FileName = r.SafeFileName,
                                 FileSize = r.FileSize,
-                                CreatedAt = r.AvailableUtc?.ToString("o") ?? r.CreatedAtUtc.ToString("o")
+                                CreatedAt = r.AvailableUtc?.ToString("o") ?? r.CreatedAtUtc.ToString("o"),
+                                P2PAddress = r.P2PAddress,
+                                P2PPort = r.P2PPort
                             }).ToList();
 
                             await session.SendPacketAsync(new Packet
@@ -726,7 +740,9 @@ namespace ChatServer
                     TransferId = record.TransferId,
                     RoomId = record.RoomId,
                     FileName = record.SafeFileName,
-                    FileSize = record.FileSize
+                    FileSize = record.FileSize,
+                    P2PAddress = record.P2PAddress,
+                    P2PPort = record.P2PPort
                 })
             };
 

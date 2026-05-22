@@ -88,6 +88,8 @@ public class FileOfferData
     public string FileName { get; set; } = string.Empty;
     public long FileSize { get; set; }
     public string CreatedAt { get; set; } = string.Empty;
+    public string P2PAddress { get; set; } = string.Empty;
+    public int P2PPort { get; set; }
 }
 
 public class FileAvailableData
@@ -96,6 +98,8 @@ public class FileAvailableData
     public string RoomId { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public long FileSize { get; set; }
+    public string P2PAddress { get; set; } = string.Empty;
+    public int P2PPort { get; set; }
 }
 
 public class FileTransferFailedData
@@ -127,6 +131,8 @@ public class FileItemData
     public string FileName { get; set; } = string.Empty;
     public long FileSize { get; set; }
     public string CreatedAt { get; set; } = string.Empty;
+    public string P2PAddress { get; set; } = string.Empty;
+    public int P2PPort { get; set; }
 }
 
 public class FileListResponseData

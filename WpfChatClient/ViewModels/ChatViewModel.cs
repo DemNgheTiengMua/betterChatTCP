@@ -314,6 +314,8 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         var sender = string.IsNullOrWhiteSpace(offer.Sender) ? "Unknown" : offer.Sender;
         var isOwn = string.Equals(sender, _chatService.CurrentUsername, StringComparison.Ordinal);
 
+        bool isP2p = !string.IsNullOrWhiteSpace(offer.P2PAddress);
+
         if (!_fileTransfers.TryGetValue(offer.TransferId, out var transfer))
         {
             transfer = new FileTransferItem
@@ -324,9 +326,11 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
                 Sender = sender,
                 RoomId = normalizedRoomId,
                 IsOwn = isOwn,
-                Status = isOwn ? FileTransferUiStatus.Uploading : FileTransferUiStatus.Pending,
-                StatusText = isOwn ? "Uploading" : "Waiting",
-                Progress = isOwn ? 0 : 0
+                P2PAddress = offer.P2PAddress ?? "",
+                P2PPort = offer.P2PPort,
+                Status = isOwn ? (isP2p ? FileTransferUiStatus.Available : FileTransferUiStatus.Uploading) : (isP2p ? FileTransferUiStatus.Available : FileTransferUiStatus.Pending),
+                StatusText = isOwn ? (isP2p ? "Hosting..." : "Uploading") : (isP2p ? "Ready to download" : "Waiting"),
+                Progress = isOwn ? (isP2p ? 100 : 0) : (isP2p ? 100 : 0)
             };
             _fileTransfers[offer.TransferId] = transfer;
         }
@@ -337,7 +341,16 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             transfer.Sender = sender;
             transfer.RoomId = normalizedRoomId;
             transfer.IsOwn = isOwn;
-            if (transfer.Status == FileTransferUiStatus.Pending)
+            transfer.P2PAddress = offer.P2PAddress ?? "";
+            transfer.P2PPort = offer.P2PPort;
+            
+            if (transfer.Status == FileTransferUiStatus.Pending && isP2p)
+            {
+                transfer.Status = FileTransferUiStatus.Available;
+                transfer.StatusText = "Ready to download";
+                transfer.Progress = 100;
+            }
+            else if (transfer.Status == FileTransferUiStatus.Pending)
             {
                 transfer.StatusText = "Waiting";
             }
@@ -765,11 +778,6 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         dispatcher.BeginInvoke(() =>
         {
             AddOrUpdateFileOffer(offer);
-            if (_fileTransfers.TryGetValue(offer.TransferId, out var transfer) &&
-                string.Equals(offer.Sender, _chatService.CurrentUsername, StringComparison.Ordinal))
-            {
-                TryStartUploadAfterOffer(transfer);
-            }
 
             if (!string.Equals(offer.Sender, _chatService.CurrentUsername, StringComparison.Ordinal) &&
                 !string.Equals(NormalizeRoomId(offer.RoomId), CurrentRoomId, StringComparison.OrdinalIgnoreCase))
@@ -804,6 +812,9 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             {
                 if (_fileTransfers.TryGetValue(f.TransferId, out var existingTransfer))
                 {
+                    existingTransfer.P2PAddress = f.P2PAddress ?? "";
+                    existingTransfer.P2PPort = f.P2PPort;
+                    
                     if (!SharedFiles.Contains(existingTransfer))
                     {
                         SharedFiles.Add(existingTransfer);
@@ -811,6 +822,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
                 }
                 else
                 {
+                    bool isP2p = !string.IsNullOrWhiteSpace(f.P2PAddress);
                     var item = new FileTransferItem
                     {
                         TransferId = f.TransferId,
@@ -819,8 +831,10 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
                         Sender = f.Sender,
                         RoomId = f.RoomId,
                         Status = FileTransferUiStatus.Available,
-                        StatusText = "Ready to download",
-                        IsOwn = string.Equals(f.Sender, _chatService.CurrentUsername, StringComparison.OrdinalIgnoreCase)
+                        StatusText = isP2p && string.Equals(f.Sender, _chatService.CurrentUsername, StringComparison.OrdinalIgnoreCase) ? "Hosting..." : "Ready to download",
+                        IsOwn = string.Equals(f.Sender, _chatService.CurrentUsername, StringComparison.OrdinalIgnoreCase),
+                        P2PAddress = f.P2PAddress ?? "",
+                        P2PPort = f.P2PPort
                     };
                     _fileTransfers[f.TransferId] = item;
                     SharedFiles.Add(item);
@@ -982,122 +996,84 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         }
 
         var username = _chatService.CurrentUsername ?? "You";
+        var transferId = Guid.NewGuid().ToString("N");
+        
+        var cts = new CancellationTokenSource();
+        int p2pPort = LanFileTransfer.HostFileZeroCopy(fileInfo.FullName, out Task hostingTask, cts.Token);
+        _fileTransferCancellations[transferId] = cts;
+        
+        string localIp = "127.0.0.1";
+        try 
+        {
+            var host = System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName());
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+                {
+                    localIp = ip.ToString();
+                    break;
+                }
+            }
+        } catch { }
+
         var transfer = new FileTransferItem
         {
-            TransferId = Guid.NewGuid().ToString("N"),
+            TransferId = transferId,
             FileName = fileInfo.Name,
             FileSize = fileInfo.Length,
             Sender = username,
             RoomId = CurrentRoomId,
             IsOwn = true,
             LocalPath = fileInfo.FullName,
-            Status = FileTransferUiStatus.Pending,
-            StatusText = "Waiting for server",
-            Progress = 0
+            Status = FileTransferUiStatus.Available,
+            StatusText = "Hosting...",
+            Progress = 100,
+            P2PAddress = localIp,
+            P2PPort = p2pPort
         };
 
         _fileTransfers[transfer.TransferId] = transfer;
-        AddOrUpdateFileOffer(new FileOfferData
+        
+        var offerData = new FileOfferData
         {
             TransferId = transfer.TransferId,
             RoomId = transfer.RoomId,
             Sender = username,
             FileName = transfer.FileName,
             FileSize = transfer.FileSize,
-            CreatedAt = DateTime.Now.ToString("o")
-        });
+            CreatedAt = DateTime.Now.ToString("o"),
+            P2PAddress = localIp,
+            P2PPort = p2pPort
+        };
+        
+        AddOrUpdateFileOffer(offerData);
 
-        var sent = await _chatService.SendFileOfferAsync(new FileOfferData
-        {
-            TransferId = transfer.TransferId,
-            RoomId = transfer.RoomId,
-            Sender = username,
-            FileName = transfer.FileName,
-            FileSize = transfer.FileSize,
-            CreatedAt = DateTime.Now.ToString("o")
-        });
+        var sent = await _chatService.SendFileOfferAsync(offerData);
 
         if (!sent)
         {
             transfer.Status = FileTransferUiStatus.Failed;
             transfer.StatusText = "Failed";
             transfer.ErrorMessage = "File offer was not sent.";
+            cts.Cancel();
             return;
         }
-
-    }
-
-    private void TryStartUploadAfterOffer(FileTransferItem transfer)
-    {
-        if (!transfer.IsOwn ||
-            string.IsNullOrWhiteSpace(transfer.LocalPath) ||
-            transfer.Status is FileTransferUiStatus.Available or FileTransferUiStatus.Downloaded or FileTransferUiStatus.Failed or FileTransferUiStatus.Canceled ||
-            _fileTransferCancellations.ContainsKey(transfer.TransferId))
+        
+        _ = hostingTask.ContinueWith(t => 
         {
-            return;
-        }
-
-        var serverIp = _chatService.ServerIp;
-        if (string.IsNullOrWhiteSpace(serverIp))
-        {
-            transfer.Status = FileTransferUiStatus.Failed;
-            transfer.StatusText = "Failed";
-            transfer.ErrorMessage = "Server address is not available.";
-            return;
-        }
-
-        transfer.Status = FileTransferUiStatus.Uploading;
-        transfer.StatusText = "Uploading";
-        _ = UploadFileInBackgroundAsync(transfer, transfer.LocalPath, serverIp, _chatService.FilePort);
-    }
-
-    private async Task UploadFileInBackgroundAsync(FileTransferItem transfer, string sourcePath, string serverIp, int filePort)
-    {
-        using var cts = new CancellationTokenSource();
-        _fileTransferCancellations[transfer.TransferId] = cts;
-
-        try
-        {
-            var progress = new Progress<FileTransferProgress>(p =>
+            var dispatcher = Application.Current?.Dispatcher;
+            dispatcher?.BeginInvoke(() => 
             {
-                transfer.Progress = p.Percent;
-                transfer.StatusText = $"Uploading {p.Percent:0}%";
+                if (transfer.Status != FileTransferUiStatus.Canceled && transfer.Status != FileTransferUiStatus.Failed)
+                {
+                    transfer.StatusText = "Sent successfully";
+                }
             });
-
-            await _fileTransferService.UploadFileAsync(
-                new FileUploadRequest(
-                    serverIp,
-                    filePort,
-                    transfer.TransferId,
-                    transfer.Sender,
-                    transfer.RoomId,
-                    sourcePath,
-                    transfer.FileName,
-                    transfer.FileSize),
-                progress,
-                cts.Token);
-
-            transfer.Progress = 100;
-            transfer.Status = FileTransferUiStatus.Uploading;
-            transfer.StatusText = "Processing";
-        }
-        catch (OperationCanceledException)
-        {
-            transfer.Status = FileTransferUiStatus.Canceled;
-            transfer.StatusText = "Canceled";
-        }
-        catch (Exception ex)
-        {
-            transfer.Status = FileTransferUiStatus.Failed;
-            transfer.StatusText = "Failed";
-            transfer.ErrorMessage = ex.Message;
-            AddToast("Upload failed", ex.Message, "system", "file");
-        }
-        finally
-        {
-            _fileTransferCancellations.Remove(transfer.TransferId);
-        }
+            _fileTransferCancellations.Remove(transferId);
+        });
     }
+
+
 
     [RelayCommand]
     private void DownloadFile(FileTransferItem? transfer)
@@ -1140,22 +1116,40 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             transfer.StatusText = "Downloading";
             transfer.Progress = 0;
 
-            var progress = new Progress<FileTransferProgress>(p =>
+            var progress = new Progress<double>(p =>
             {
-                transfer.Progress = p.Percent;
-                transfer.StatusText = $"Downloading {p.Percent:0}%";
+                transfer.Progress = p;
+                transfer.StatusText = $"Downloading {p:0}%";
             });
 
-            await _fileTransferService.DownloadFileAsync(
-                new FileDownloadRequest(
-                    serverIp,
-                    filePort,
-                    transfer.TransferId,
-                    _chatService.CurrentUsername ?? string.Empty,
-                    transfer.RoomId,
-                    destinationPath),
-                progress,
-                cts.Token);
+            if (!string.IsNullOrWhiteSpace(transfer.P2PAddress))
+            {
+                await LanFileTransfer.DownloadFileHighPerformanceAsync(
+                    transfer.P2PAddress,
+                    transfer.P2PPort,
+                    Path.GetDirectoryName(destinationPath) ?? "",
+                    progress,
+                    cts.Token);
+            }
+            else
+            {
+                var fileTransferProgress = new Progress<FileTransferProgress>(p =>
+                {
+                    transfer.Progress = p.Percent;
+                    transfer.StatusText = $"Downloading {p.Percent:0}%";
+                });
+
+                await _fileTransferService.DownloadFileAsync(
+                    new FileDownloadRequest(
+                        serverIp,
+                        filePort,
+                        transfer.TransferId,
+                        _chatService.CurrentUsername ?? string.Empty,
+                        transfer.RoomId,
+                        destinationPath),
+                    fileTransferProgress,
+                    cts.Token);
+            }
 
             transfer.LocalPath = destinationPath;
             transfer.Progress = 100;

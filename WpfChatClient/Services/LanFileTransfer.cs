@@ -10,146 +10,142 @@ namespace WpfChatClient.Services;
 
 public class LanFileTransfer
 {
-    // Requirement 5: Large Socket buffers (1 MB) to maximize LAN sliding window throughput
-    private const int SocketBufferSize = 1024 * 1024; 
-    
-    // Requirement 4: At least 64 KB FileStream buffer
+    private const int SocketBufferSize = 1024 * 1024; // 1 MB
     private const int FileStreamBufferSize = 65536;
 
     /// <summary>
-    /// SENDER: Uses zero-copy OS-level transmission.
+    /// SENDER: Listens for an incoming connection and sends the file using zero-copy.
+    /// Returns the assigned port that the receiver must connect to.
     /// </summary>
-    public static async Task SendFileZeroCopyAsync(string filePath, string targetIp, int targetPort, CancellationToken cancellationToken = default)
+    public static int HostFileZeroCopy(string filePath, out Task hostingTask, CancellationToken cancellationToken = default)
     {
-        try
+        var fileInfo = new FileInfo(filePath);
+        if (!fileInfo.Exists)
+            throw new FileNotFoundException("Source file does not exist.", filePath);
+
+        long fileSize = fileInfo.Length;
+        string fileName = fileInfo.Name;
+
+        Socket listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        listener.Bind(new IPEndPoint(IPAddress.Any, 0)); // OS assigns a random port
+        listener.Listen(1);
+        
+        int assignedPort = ((IPEndPoint)listener.LocalEndPoint!).Port;
+
+        hostingTask = Task.Run(async () =>
         {
-            var fileInfo = new FileInfo(filePath);
-            if (!fileInfo.Exists)
-                throw new FileNotFoundException("Source file does not exist.", filePath);
+            try
+            {
+                using (listener)
+                {
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        var clientSocket = await listener.AcceptAsync(cancellationToken);
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                using (clientSocket)
+                                {
+                                    clientSocket.SendBufferSize = SocketBufferSize;
+                                    clientSocket.NoDelay = true;
 
-            long fileSize = fileInfo.Length;
-            string fileName = fileInfo.Name;
+                                    byte[] fileNameBytes = Encoding.UTF8.GetBytes(fileName);
+                                    int headerLength = 8 + fileNameBytes.Length;
+                                    
+                                    byte[] headerBuffer = new byte[4 + headerLength];
+                                    BitConverter.TryWriteBytes(headerBuffer.AsSpan(0, 4), headerLength);
+                                    BitConverter.TryWriteBytes(headerBuffer.AsSpan(4, 8), fileSize);
+                                    fileNameBytes.CopyTo(headerBuffer, 12);
 
-            // 1. Dedicated TCP Connection
-            using Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            
-            // 5. Explicit Buffer Tuning & NoDelay for reduced latency
-            socket.SendBufferSize = SocketBufferSize;
-            socket.ReceiveBufferSize = SocketBufferSize;
-            socket.NoDelay = true; 
+                                    await clientSocket.SendFileAsync(
+                                        fileName: filePath,
+                                        preBuffer: headerBuffer,
+                                        postBuffer: null,
+                                        flags: TransmitFileOptions.UseDefaultWorkerThread,
+                                        cancellationToken: cancellationToken);
 
-            await socket.ConnectAsync(targetIp, targetPort, cancellationToken);
+                                    clientSocket.Shutdown(SocketShutdown.Send);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Error sending file to client: {ex.Message}");
+                            }
+                        }, cancellationToken);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Network error during file host: {ex.Message}");
+            }
+        }, cancellationToken);
 
-            // 6. Metadata Header
-            // Format: [HeaderLength (4 bytes)] [FileSize (8 bytes)] [FileName UTF8 bytes]
-            byte[] fileNameBytes = Encoding.UTF8.GetBytes(fileName);
-            int headerLength = 8 + fileNameBytes.Length;
-            
-            byte[] headerBuffer = new byte[4 + headerLength];
-            BitConverter.TryWriteBytes(headerBuffer.AsSpan(0, 4), headerLength);
-            BitConverter.TryWriteBytes(headerBuffer.AsSpan(4, 8), fileSize);
-            fileNameBytes.CopyTo(headerBuffer, 12);
-
-            // 2. Zero-Copy Sending
-            // SENIOR TIP: By passing the headerBuffer as the "preBuffer" to SendFileAsync, 
-            // the OS kernel will combine your metadata header and the zero-copy disk read 
-            // into a single TransmitFile system call!
-            await socket.SendFileAsync(
-                fileName: filePath,
-                preBuffer: headerBuffer,
-                postBuffer: null,
-                flags: TransmitFileOptions.UseDefaultWorkerThread,
-                cancellationToken: cancellationToken);
-
-            // Gracefully send FIN packet. This tells the receiver's NetworkStream
-            // that no more data is coming, allowing their CopyToAsync to naturally complete.
-            socket.Shutdown(SocketShutdown.Send);
-        }
-        catch (SocketException ex)
-        {
-            // Logging or higher-level exception propagation here
-            Console.WriteLine($"Network error during file send: {ex.Message}");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error sending file: {ex.Message}");
-            throw;
-        }
+        return assignedPort;
     }
 
     /// <summary>
-    /// RECEIVER: Highly optimized stream copying.
+    /// RECEIVER: Connects to the host and downloads the file efficiently.
     /// </summary>
-    public static async Task ReceiveFileHighPerformanceAsync(int listeningPort, string saveDirectory, CancellationToken cancellationToken = default)
+    public static async Task DownloadFileHighPerformanceAsync(string hostIp, int hostPort, string saveDirectory, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
     {
-        // 1. Dedicated TCP listener for this specific transfer
-        using Socket listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        try
+        using Socket clientSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        clientSocket.ReceiveBufferSize = SocketBufferSize;
+        clientSocket.NoDelay = true;
+
+        await clientSocket.ConnectAsync(hostIp, hostPort, cancellationToken);
+        
+        await using NetworkStream networkStream = new NetworkStream(clientSocket, ownsSocket: false);
+
+        byte[] lengthBuffer = new byte[4];
+        await ReadExactBytesAsync(networkStream, lengthBuffer, cancellationToken);
+        int headerLength = BitConverter.ToInt32(lengthBuffer, 0);
+
+        byte[] headerBuffer = new byte[headerLength];
+        await ReadExactBytesAsync(networkStream, headerBuffer, cancellationToken);
+
+        long expectedFileSize = BitConverter.ToInt64(headerBuffer, 0);
+        string fileName = Encoding.UTF8.GetString(headerBuffer, 8, headerLength - 8);
+
+        string savePath = Path.Combine(saveDirectory, fileName);
+        Directory.CreateDirectory(saveDirectory);
+
+        await using FileStream fileStream = new FileStream(
+            savePath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: FileStreamBufferSize,
+            options: FileOptions.Asynchronous);
+
+        if (progress == null)
         {
-            listener.ReceiveBufferSize = SocketBufferSize;
-            listener.SendBufferSize = SocketBufferSize;
-            listener.Bind(new IPEndPoint(IPAddress.Any, listeningPort));
-            listener.Listen(1); // Backlog of 1 for a 1-to-1 dedicated transfer
-
-            using Socket clientSocket = await listener.AcceptAsync(cancellationToken);
-            
-            // 5. Buffer tuning on the accepted socket
-            clientSocket.ReceiveBufferSize = SocketBufferSize;
-            clientSocket.SendBufferSize = SocketBufferSize;
-            clientSocket.NoDelay = true;
-
-            await using NetworkStream networkStream = new NetworkStream(clientSocket, ownsSocket: false);
-
-            // Read Metadata Header Length (4 bytes)
-            byte[] lengthBuffer = new byte[4];
-            await ReadExactBytesAsync(networkStream, lengthBuffer, cancellationToken);
-            int headerLength = BitConverter.ToInt32(lengthBuffer, 0);
-
-            // Read the rest of the Header
-            byte[] headerBuffer = new byte[headerLength];
-            await ReadExactBytesAsync(networkStream, headerBuffer, cancellationToken);
-
-            // 6. Decode Header
-            long expectedFileSize = BitConverter.ToInt64(headerBuffer, 0);
-            string fileName = Encoding.UTF8.GetString(headerBuffer, 8, headerLength - 8);
-
-            string savePath = Path.Combine(saveDirectory, fileName);
-            Directory.CreateDirectory(saveDirectory);
-
-            // 4. FileStream Optimization (Asynchronous + 64KB Buffer)
-            await using FileStream fileStream = new FileStream(
-                savePath,
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: FileStreamBufferSize,
-                options: FileOptions.Asynchronous);
-
-            // 3. High-Performance Receiving
-            // Because the sender executes a clean Socket.Shutdown, this single line cleanly reads the stream exactly until EOF.
             await networkStream.CopyToAsync(fileStream, cancellationToken);
-            await fileStream.FlushAsync(cancellationToken);
-
-            // Validate the payload size matched what the metadata told us to expect
-            if (fileStream.Length != expectedFileSize)
+        }
+        else
+        {
+            byte[] buffer = new byte[FileStreamBufferSize];
+            long totalRead = 0;
+            int read;
+            while ((read = await networkStream.ReadAsync(buffer, cancellationToken)) > 0)
             {
-                throw new IOException($"Transfer incomplete. Expected {expectedFileSize} bytes, but received {fileStream.Length}.");
+                await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                totalRead += read;
+                double percent = expectedFileSize > 0 ? (totalRead * 100d / expectedFileSize) : 0;
+                progress.Report(percent);
             }
         }
-        catch (SocketException ex)
+        
+        await fileStream.FlushAsync(cancellationToken);
+
+        if (fileStream.Length != expectedFileSize)
         {
-            Console.WriteLine($"Network error during file receive: {ex.Message}");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error receiving file: {ex.Message}");
-            throw;
+            throw new IOException($"Transfer incomplete. Expected {expectedFileSize} bytes, but received {fileStream.Length}.");
         }
     }
 
-    // Helper to ensure we don't accidentally under-read TCP fragments while reading the header
     private static async Task ReadExactBytesAsync(NetworkStream stream, byte[] buffer, CancellationToken cancellationToken)
     {
         int totalRead = 0;
@@ -165,3 +161,4 @@ public class LanFileTransfer
         }
     }
 }
+

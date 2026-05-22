@@ -9,7 +9,9 @@ public sealed class FileTransferRecord
     public required string SenderAddress { get; init; }
     public required string OriginalFileName { get; init; }
     public required string SafeFileName { get; init; }
-    public required long FileSize { get; init; }
+    public long FileSize { get; set; }
+    public string P2PAddress { get; set; } = string.Empty;
+    public int P2PPort { get; set; }
     public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
     public DateTime? AvailableUtc { get; set; }
     public DateTime? FailedUtc { get; set; }

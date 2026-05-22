@@ -97,13 +97,21 @@ public sealed class FileMetadataStore
             SenderAddress = senderAddress,
             OriginalFileName = offer.FileName,
             SafeFileName = safeFileName,
-            FileSize = offer.FileSize
+            FileSize = offer.FileSize,
+            P2PAddress = offer.P2PAddress,
+            P2PPort = offer.P2PPort
         };
 
         if (!_records.TryAdd(candidate.TransferId, candidate))
         {
             failureReason = "Transfer ID is already registered.";
             return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.P2PAddress))
+        {
+            candidate.Status = FileTransferStatus.Available;
+            candidate.AvailableUtc = DateTime.UtcNow;
         }
 
         record = candidate;
@@ -143,6 +151,8 @@ public sealed class FileMetadataStore
         public long FileSize { get; set; }
         public DateTime CreatedAtUtc { get; set; }
         public DateTime? AvailableUtc { get; set; }
+        public string P2PAddress { get; set; } = string.Empty;
+        public int P2PPort { get; set; }
     }
 
     public void LoadMetadataFromDisk()
@@ -178,7 +188,9 @@ public sealed class FileMetadataStore
                                 CreatedAtUtc = dto.CreatedAtUtc,
                                 AvailableUtc = dto.AvailableUtc,
                                 Status = FileTransferStatus.Available,
-                                FinalPath = completedPath
+                                FinalPath = completedPath,
+                                P2PAddress = dto.P2PAddress,
+                                P2PPort = dto.P2PPort
                             };
                             _records.TryAdd(record.TransferId, record);
                             Console.WriteLine($"[FILE] Loaded available file from disk: {record.SafeFileName} ({record.FileSize} bytes) for Room: {record.RoomId}");
@@ -248,7 +260,9 @@ public sealed class FileMetadataStore
                     SafeFileName = record.SafeFileName,
                     FileSize = record.FileSize,
                     CreatedAtUtc = record.CreatedAtUtc,
-                    AvailableUtc = record.AvailableUtc
+                    AvailableUtc = record.AvailableUtc,
+                    P2PAddress = record.P2PAddress,
+                    P2PPort = record.P2PPort
                 };
                 var json = JsonSerializer.Serialize(dto);
                 File.WriteAllText(metadataPath, json);
