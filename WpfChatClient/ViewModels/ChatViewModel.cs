@@ -772,7 +772,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
 
         if (fileInfo.Length > FileTransferItem.MaxFileSizeBytes)
         {
-            AddToast("File too large", "Maximum size is 1 GB.", "system", "file");
+            AddToast("File too large", "Maximum size is 10 GB.", "system", "file");
             return;
         }
 

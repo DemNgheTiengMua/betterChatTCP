@@ -5,7 +5,7 @@ namespace WpfChatClient.Models;
 
 public partial class FileTransferItem : ObservableObject
 {
-    public const long MaxFileSizeBytes = 1_073_741_824;
+    public const long MaxFileSizeBytes = 10L * 1024 * 1024 * 1024;
 
     [ObservableProperty]
     private string _transferId = string.Empty;

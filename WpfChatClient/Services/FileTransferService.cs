@@ -10,7 +10,7 @@ namespace WpfChatClient.Services;
 public sealed class FileTransferService : IFileTransferService
 {
     private const int BufferSize = 262_144;
-    private const long MaxFileSizeBytes = 1_073_741_824;
+    private const long MaxFileSizeBytes = 10L * 1024 * 1024 * 1024;
 
     public async Task UploadFileAsync(
         FileUploadRequest request,
@@ -211,7 +211,7 @@ public sealed class FileTransferService : IFileTransferService
 
         if (fileSize > MaxFileSizeBytes)
         {
-            throw new InvalidOperationException("File exceeds the 1 GB size limit.");
+            throw new InvalidOperationException("File exceeds the 10 GB size limit.");
         }
     }
 
