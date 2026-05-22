@@ -304,7 +304,9 @@ public class ChatService : IChatService
             FileSize = offer.FileSize,
             Sender = string.IsNullOrWhiteSpace(offer.Sender) ? _lastUsername ?? CurrentUsername ?? string.Empty : offer.Sender,
             RoomId = string.IsNullOrWhiteSpace(offer.RoomId) ? _activeRoomId : NormalizeRoomId(offer.RoomId),
-            CreatedAt = offer.CreatedAt
+            CreatedAt = offer.CreatedAt,
+            P2PAddress = offer.P2PAddress,
+            P2PPort = offer.P2PPort
         };
 
         return await TrySendPacketAsync(new Packet
