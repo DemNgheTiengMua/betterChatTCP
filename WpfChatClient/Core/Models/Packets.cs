@@ -16,7 +16,10 @@ public enum PacketType
     Heartbeat,
     PrivateMessage,
     RoomJoin,
-    ConnectionRejected
+    ConnectionRejected,
+    FileOffer,
+    FileAvailable,
+    FileTransferFailed
 }
 
 public class Packet
@@ -60,3 +63,27 @@ public class TypingData
 public class UserListUpdateData { public List<string> Users { get; set; } = new(); }
 public class SystemMessageData { public string Message { get; set; } = string.Empty; }
 public class HeartbeatData { }
+
+public class FileOfferData
+{
+    public string TransferId { get; set; } = string.Empty;
+    public string RoomId { get; set; } = string.Empty;
+    public string Sender { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public string CreatedAt { get; set; } = string.Empty;
+}
+
+public class FileAvailableData
+{
+    public string TransferId { get; set; } = string.Empty;
+    public string RoomId { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+}
+
+public class FileTransferFailedData
+{
+    public string TransferId { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+}

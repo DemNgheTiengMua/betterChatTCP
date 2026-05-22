@@ -444,6 +444,9 @@
                                                     <DataTrigger Binding="{Binding IsSticker}" Value="True">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
                                                     </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsFile}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </TextBlock.Style>
@@ -481,6 +484,123 @@
                                                        TextAlignment="Center"
                                                        HorizontalAlignment="Center"/>
                                         </StackPanel>
+                                    </Border>
+
+                                    <Border Width="320"
+                                            Padding="12"
+                                            CornerRadius="14"
+                                            BorderThickness="1"
+                                            BorderBrush="{StaticResource BrightGlassBorder}"
+                                            Background="#E6FFFFFF">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsFile}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Grid DataContext="{Binding FileTransfer}">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <Border Grid.RowSpan="2"
+                                                    Width="42"
+                                                    Height="42"
+                                                    CornerRadius="12"
+                                                    Background="{StaticResource LiquidAccentSoft}"
+                                                    Margin="0,0,10,0">
+                                                <TextBlock Text="FILE"
+                                                           FontSize="10"
+                                                           FontWeight="Bold"
+                                                           Foreground="White"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"/>
+                                            </Border>
+
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding FileName}"
+                                                       Foreground="{StaticResource BrightTextPrimary}"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis"/>
+
+                                            <StackPanel Grid.Row="1"
+                                                        Grid.Column="1"
+                                                        Orientation="Horizontal"
+                                                        Margin="0,4,0,0">
+                                                <TextBlock Text="{Binding SizeText}"
+                                                           Foreground="{StaticResource BrightTextSecondary}"
+                                                           FontSize="11"/>
+                                                <TextBlock Text="  -  "
+                                                           Foreground="{StaticResource BrightTextSecondary}"
+                                                           FontSize="11"/>
+                                                <TextBlock Text="{Binding StatusText}"
+                                                           Foreground="{StaticResource BrightTextSecondary}"
+                                                           FontSize="11"/>
+                                            </StackPanel>
+
+                                            <Grid Grid.Row="2"
+                                                  Grid.ColumnSpan="2"
+                                                  Margin="0,10,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <ProgressBar Grid.Column="0"
+                                                             Minimum="0"
+                                                             Maximum="100"
+                                                             Height="6"
+                                                             Value="{Binding Progress}"
+                                                             VerticalAlignment="Center"/>
+
+                                                <Button Grid.Column="1"
+                                                        Content="Download"
+                                                        Margin="10,0,0,0"
+                                                        Command="{Binding DataContext.DownloadFileCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource FlatRowButtonStyle}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Setter Property="Padding" Value="8,4"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding CanDownload}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+
+                                                <Button Grid.Column="2"
+                                                        Content="Cancel"
+                                                        Margin="8,0,0,0"
+                                                        Command="{Binding DataContext.CancelFileTransferCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource FlatRowButtonStyle}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Setter Property="Padding" Value="8,4"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding CanCancel}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                            </Grid>
+                                        </Grid>
                                     </Border>
                                 </StackPanel>
                             </Border>
@@ -574,6 +694,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
                         <ui:TextBox Grid.Column="0"
@@ -591,13 +712,22 @@
                         <Button Grid.Column="1"
                                 Style="{StaticResource ComposerIconButtonStyle}"
                                 Margin="0,0,8,0"
+                                ToolTip="Attach file"
+                                Command="{Binding AttachFileCommand}"
+                                IsEnabled="{Binding IsConnected}">
+                            <TextBlock Text="+" FontSize="22" FontWeight="SemiBold"/>
+                        </Button>
+
+                        <Button Grid.Column="2"
+                                Style="{StaticResource ComposerIconButtonStyle}"
+                                Margin="0,0,8,0"
                                 ToolTip="Insert quick emoji"
                                 Command="{Binding InsertQuickEmojiCommand}"
                                 IsEnabled="{Binding IsConnected}">
                             <TextBlock Text="&#x263A;" FontSize="18"/>
                         </Button>
 
-                        <Button Grid.Column="2"
+                        <Button Grid.Column="3"
                                 Style="{StaticResource ComposerIconButtonStyle}"
                                 Margin="0,0,8,0"
                                 ToolTip="Open stickers"
@@ -606,7 +736,7 @@
                             <TextBlock Text="&#x2726;" FontSize="18"/>
                         </Button>
 
-                        <ui:Button Grid.Column="3"
+                        <ui:Button Grid.Column="4"
                                    Content="Send"
                                    Command="{Binding SendMessageCommand}"
                                    Style="{StaticResource ModernButton}"

@@ -12,7 +12,9 @@ public record ChatMessage(
     string StickerId = "",
     string StickerGlyph = "",
     string StickerName = "",
-    string StickerAccentColor = "#5865F2")
+    string StickerAccentColor = "#5865F2",
+    bool IsFile = false,
+    FileTransferItem? FileTransfer = null)
 {
-    public bool IsText => !IsSticker;
+    public bool IsText => !IsSticker && !IsFile;
 }

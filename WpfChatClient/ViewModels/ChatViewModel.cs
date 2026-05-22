@@ -1,18 +1,22 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
+using WpfChatClient.Core.Models;
 using WpfChatClient.Models;
 using WpfChatClient.Core.Interfaces;
 using WpfChatClient.Infrastructure;
 using WpfChatClient.Messages;
 using WpfChatClient.Services;
+using Microsoft.Win32;
 
 namespace WpfChatClient.ViewModels;
 
@@ -21,6 +25,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     private readonly IChatService _chatService;
     private readonly MessageCache _messageCache;
     private readonly IStickerService _stickerService;
+    private readonly IFileTransferService _fileTransferService;
     private bool _disposed;
     private DateTime _lastTypingSent = DateTime.MinValue;
     private readonly DispatcherTimer _typingClearTimer;
@@ -29,6 +34,8 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     private readonly Dictionary<string, RoomItem> _roomLookup = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<ChatMessage>> _roomMessages = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _roomMessageIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FileTransferItem> _fileTransfers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CancellationTokenSource> _fileTransferCancellations = new(StringComparer.OrdinalIgnoreCase);
     private bool _hasJoinedRooms;
     private bool _hasConnectedOnce;
 
@@ -68,11 +75,16 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     public ObservableCollection<RoomItem> Rooms { get; } = new();
     public ObservableCollection<StickerItem> Stickers { get; } = new();
 
-    public ChatViewModel(IChatService chatService, MessageCache messageCache, IStickerService stickerService)
+    public ChatViewModel(
+        IChatService chatService,
+        MessageCache messageCache,
+        IStickerService stickerService,
+        IFileTransferService fileTransferService)
     {
         _chatService = chatService;
         _messageCache = messageCache;
         _stickerService = stickerService;
+        _fileTransferService = fileTransferService;
         foreach (var sticker in _stickerService.GetBuiltInStickers())
         {
             Stickers.Add(sticker);
@@ -84,6 +96,9 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         _chatService.UserTyping += OnUserTyping;
         _chatService.ConnectionLost += OnConnectionLost;
         _chatService.ConnectionRestored += OnConnectionRestored;
+        _chatService.FileOfferReceived += OnFileOfferReceived;
+        _chatService.FileAvailableReceived += OnFileAvailableReceived;
+        _chatService.FileTransferFailedReceived += OnFileTransferFailedReceived;
 
         IsConnected = _chatService.IsConnected;
         if (IsConnected)
@@ -251,6 +266,113 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         }
 
         return new ChatMessage(sender, content, time, isOwn, messageId, GetAvatarColor(sender));
+    }
+
+    private ChatMessage CreateFileMessage(FileTransferItem transfer)
+    {
+        return new ChatMessage(
+            transfer.Sender,
+            transfer.FileName,
+            DateTime.Now.ToString("HH:mm"),
+            transfer.IsOwn,
+            transfer.TransferId,
+            GetAvatarColor(transfer.Sender),
+            IsFile: true,
+            FileTransfer: transfer);
+    }
+
+    private void AddOrUpdateFileOffer(FileOfferData offer)
+    {
+        var normalizedRoomId = NormalizeRoomId(offer.RoomId);
+        var sender = string.IsNullOrWhiteSpace(offer.Sender) ? "Unknown" : offer.Sender;
+        var isOwn = string.Equals(sender, _chatService.CurrentUsername, StringComparison.Ordinal);
+
+        if (!_fileTransfers.TryGetValue(offer.TransferId, out var transfer))
+        {
+            transfer = new FileTransferItem
+            {
+                TransferId = offer.TransferId,
+                FileName = offer.FileName,
+                FileSize = offer.FileSize,
+                Sender = sender,
+                RoomId = normalizedRoomId,
+                IsOwn = isOwn,
+                Status = isOwn ? FileTransferUiStatus.Uploading : FileTransferUiStatus.Pending,
+                StatusText = isOwn ? "Uploading" : "Waiting",
+                Progress = isOwn ? 0 : 0
+            };
+            _fileTransfers[offer.TransferId] = transfer;
+        }
+        else
+        {
+            transfer.FileName = offer.FileName;
+            transfer.FileSize = offer.FileSize;
+            transfer.Sender = sender;
+            transfer.RoomId = normalizedRoomId;
+            transfer.IsOwn = isOwn;
+            if (transfer.Status == FileTransferUiStatus.Pending)
+            {
+                transfer.StatusText = "Waiting";
+            }
+        }
+
+        var message = CreateFileMessage(transfer);
+        var wasAdded = TryAddMessageToRoom(normalizedRoomId, message);
+        if (wasAdded && string.Equals(normalizedRoomId, CurrentRoomId, StringComparison.OrdinalIgnoreCase))
+        {
+            Messages.Add(message);
+        }
+        else if (wasAdded && _roomLookup.TryGetValue(normalizedRoomId, out var room))
+        {
+            room.UnreadCount++;
+        }
+    }
+
+    private void MarkFileAvailable(FileAvailableData file)
+    {
+        if (!_fileTransfers.TryGetValue(file.TransferId, out var transfer))
+        {
+            transfer = new FileTransferItem
+            {
+                TransferId = file.TransferId,
+                FileName = file.FileName,
+                FileSize = file.FileSize,
+                Sender = "Unknown",
+                RoomId = NormalizeRoomId(file.RoomId),
+                IsOwn = false
+            };
+            _fileTransfers[file.TransferId] = transfer;
+            AddOrUpdateFileOffer(new FileOfferData
+            {
+                TransferId = file.TransferId,
+                RoomId = file.RoomId,
+                Sender = transfer.Sender,
+                FileName = file.FileName,
+                FileSize = file.FileSize,
+                CreatedAt = DateTime.Now.ToString("o")
+            });
+        }
+
+        transfer.Status = FileTransferUiStatus.Available;
+        transfer.Progress = 100;
+        transfer.StatusText = transfer.IsOwn ? "Uploaded" : "Ready to download";
+    }
+
+    private void MarkFileFailed(FileTransferFailedData failure)
+    {
+        if (!_fileTransfers.TryGetValue(failure.TransferId, out var transfer))
+        {
+            return;
+        }
+
+        if (transfer.Status == FileTransferUiStatus.Canceled)
+        {
+            return;
+        }
+
+        transfer.Status = FileTransferUiStatus.Failed;
+        transfer.ErrorMessage = failure.Reason;
+        transfer.StatusText = "Failed";
     }
 
     private List<ChatMessage> GetRoomMessages(string roomId)
@@ -515,6 +637,51 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         });
     }
 
+    private void OnFileOfferReceived(FileOfferData offer)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+        dispatcher.BeginInvoke(() =>
+        {
+            AddOrUpdateFileOffer(offer);
+            if (_fileTransfers.TryGetValue(offer.TransferId, out var transfer) &&
+                string.Equals(offer.Sender, _chatService.CurrentUsername, StringComparison.Ordinal))
+            {
+                TryStartUploadAfterOffer(transfer);
+            }
+
+            if (!string.Equals(offer.Sender, _chatService.CurrentUsername, StringComparison.Ordinal) &&
+                !string.Equals(NormalizeRoomId(offer.RoomId), CurrentRoomId, StringComparison.OrdinalIgnoreCase))
+            {
+                AddToast("File shared", $"{offer.Sender}: {offer.FileName}", offer.Sender, "file");
+            }
+        });
+    }
+
+    private void OnFileAvailableReceived(FileAvailableData file)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+        dispatcher.BeginInvoke(() =>
+        {
+            MarkFileAvailable(file);
+        });
+    }
+
+    private void OnFileTransferFailedReceived(FileTransferFailedData failure)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+        dispatcher.BeginInvoke(() =>
+        {
+            MarkFileFailed(failure);
+            AddToast("File failed", failure.Reason, "system", "file");
+        });
+    }
+
     private void OnUsersUpdated(string[] usernames)
     {
         var dispatcher = Application.Current?.Dispatcher;
@@ -566,6 +733,268 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         catch (System.Exception)
         {
             // Error handling
+        }
+    }
+
+    [RelayCommand]
+    private async Task AttachFile()
+    {
+        if (!_chatService.IsConnected)
+        {
+            AddToast("Offline", "Connect before sending a file.", "system", "file");
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose file to send",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var fileInfo = new FileInfo(dialog.FileName);
+        if (!fileInfo.Exists)
+        {
+            AddToast("File missing", "The selected file no longer exists.", "system", "file");
+            return;
+        }
+
+        if (fileInfo.Length < 1)
+        {
+            AddToast("Empty file", "Choose a file with content.", "system", "file");
+            return;
+        }
+
+        if (fileInfo.Length > FileTransferItem.MaxFileSizeBytes)
+        {
+            AddToast("File too large", "Maximum size is 1 GB.", "system", "file");
+            return;
+        }
+
+        var serverIp = _chatService.ServerIp;
+        if (string.IsNullOrWhiteSpace(serverIp))
+        {
+            AddToast("File unavailable", "Server address is not available.", "system", "file");
+            return;
+        }
+
+        var username = _chatService.CurrentUsername ?? "You";
+        var transfer = new FileTransferItem
+        {
+            TransferId = Guid.NewGuid().ToString("N"),
+            FileName = fileInfo.Name,
+            FileSize = fileInfo.Length,
+            Sender = username,
+            RoomId = CurrentRoomId,
+            IsOwn = true,
+            LocalPath = fileInfo.FullName,
+            Status = FileTransferUiStatus.Pending,
+            StatusText = "Waiting for server",
+            Progress = 0
+        };
+
+        _fileTransfers[transfer.TransferId] = transfer;
+        AddOrUpdateFileOffer(new FileOfferData
+        {
+            TransferId = transfer.TransferId,
+            RoomId = transfer.RoomId,
+            Sender = username,
+            FileName = transfer.FileName,
+            FileSize = transfer.FileSize,
+            CreatedAt = DateTime.Now.ToString("o")
+        });
+
+        var sent = await _chatService.SendFileOfferAsync(new FileOfferData
+        {
+            TransferId = transfer.TransferId,
+            RoomId = transfer.RoomId,
+            Sender = username,
+            FileName = transfer.FileName,
+            FileSize = transfer.FileSize,
+            CreatedAt = DateTime.Now.ToString("o")
+        });
+
+        if (!sent)
+        {
+            transfer.Status = FileTransferUiStatus.Failed;
+            transfer.StatusText = "Failed";
+            transfer.ErrorMessage = "File offer was not sent.";
+            return;
+        }
+
+    }
+
+    private void TryStartUploadAfterOffer(FileTransferItem transfer)
+    {
+        if (!transfer.IsOwn ||
+            string.IsNullOrWhiteSpace(transfer.LocalPath) ||
+            transfer.Status is FileTransferUiStatus.Available or FileTransferUiStatus.Downloaded or FileTransferUiStatus.Failed or FileTransferUiStatus.Canceled ||
+            _fileTransferCancellations.ContainsKey(transfer.TransferId))
+        {
+            return;
+        }
+
+        var serverIp = _chatService.ServerIp;
+        if (string.IsNullOrWhiteSpace(serverIp))
+        {
+            transfer.Status = FileTransferUiStatus.Failed;
+            transfer.StatusText = "Failed";
+            transfer.ErrorMessage = "Server address is not available.";
+            return;
+        }
+
+        transfer.Status = FileTransferUiStatus.Uploading;
+        transfer.StatusText = "Uploading";
+        _ = UploadFileInBackgroundAsync(transfer, transfer.LocalPath, serverIp, _chatService.FilePort);
+    }
+
+    private async Task UploadFileInBackgroundAsync(FileTransferItem transfer, string sourcePath, string serverIp, int filePort)
+    {
+        using var cts = new CancellationTokenSource();
+        _fileTransferCancellations[transfer.TransferId] = cts;
+
+        try
+        {
+            var progress = new Progress<FileTransferProgress>(p =>
+            {
+                transfer.Progress = p.Percent;
+                transfer.StatusText = $"Uploading {p.Percent:0}%";
+            });
+
+            await _fileTransferService.UploadFileAsync(
+                new FileUploadRequest(
+                    serverIp,
+                    filePort,
+                    transfer.TransferId,
+                    transfer.Sender,
+                    transfer.RoomId,
+                    sourcePath,
+                    transfer.FileName,
+                    transfer.FileSize),
+                progress,
+                cts.Token);
+
+            transfer.Progress = 100;
+            transfer.Status = FileTransferUiStatus.Uploading;
+            transfer.StatusText = "Processing";
+        }
+        catch (OperationCanceledException)
+        {
+            transfer.Status = FileTransferUiStatus.Canceled;
+            transfer.StatusText = "Canceled";
+        }
+        catch (Exception ex)
+        {
+            transfer.Status = FileTransferUiStatus.Failed;
+            transfer.StatusText = "Failed";
+            transfer.ErrorMessage = ex.Message;
+            AddToast("Upload failed", ex.Message, "system", "file");
+        }
+        finally
+        {
+            _fileTransferCancellations.Remove(transfer.TransferId);
+        }
+    }
+
+    [RelayCommand]
+    private void DownloadFile(FileTransferItem? transfer)
+    {
+        if (transfer == null || !transfer.CanDownload)
+        {
+            return;
+        }
+
+        var serverIp = _chatService.ServerIp;
+        if (string.IsNullOrWhiteSpace(serverIp))
+        {
+            AddToast("File unavailable", "Server address is not available.", "system", "file");
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "Save file",
+            FileName = transfer.FileName,
+            OverwritePrompt = true
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        _ = DownloadFileInBackgroundAsync(transfer, dialog.FileName, serverIp, _chatService.FilePort);
+    }
+
+    private async Task DownloadFileInBackgroundAsync(FileTransferItem transfer, string destinationPath, string serverIp, int filePort)
+    {
+        using var cts = new CancellationTokenSource();
+        _fileTransferCancellations[transfer.TransferId] = cts;
+
+        try
+        {
+            transfer.Status = FileTransferUiStatus.Downloading;
+            transfer.StatusText = "Downloading";
+            transfer.Progress = 0;
+
+            var progress = new Progress<FileTransferProgress>(p =>
+            {
+                transfer.Progress = p.Percent;
+                transfer.StatusText = $"Downloading {p.Percent:0}%";
+            });
+
+            await _fileTransferService.DownloadFileAsync(
+                new FileDownloadRequest(
+                    serverIp,
+                    filePort,
+                    transfer.TransferId,
+                    _chatService.CurrentUsername ?? string.Empty,
+                    transfer.RoomId,
+                    destinationPath),
+                progress,
+                cts.Token);
+
+            transfer.LocalPath = destinationPath;
+            transfer.Progress = 100;
+            transfer.Status = FileTransferUiStatus.Downloaded;
+            transfer.StatusText = "Downloaded";
+        }
+        catch (OperationCanceledException)
+        {
+            transfer.Status = FileTransferUiStatus.Available;
+            transfer.StatusText = "Ready to download";
+            transfer.Progress = 100;
+        }
+        catch (Exception ex)
+        {
+            transfer.Status = FileTransferUiStatus.Failed;
+            transfer.StatusText = "Failed";
+            transfer.ErrorMessage = ex.Message;
+            AddToast("Download failed", ex.Message, "system", "file");
+        }
+        finally
+        {
+            _fileTransferCancellations.Remove(transfer.TransferId);
+        }
+    }
+
+    [RelayCommand]
+    private void CancelFileTransfer(FileTransferItem? transfer)
+    {
+        if (transfer == null)
+        {
+            return;
+        }
+
+        if (_fileTransferCancellations.TryGetValue(transfer.TransferId, out var cts))
+        {
+            transfer.StatusText = "Canceling";
+            cts.Cancel();
         }
     }
 
@@ -744,8 +1173,17 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             _chatService.UserTyping -= OnUserTyping;
             _chatService.ConnectionLost -= OnConnectionLost;
             _chatService.ConnectionRestored -= OnConnectionRestored;
+            _chatService.FileOfferReceived -= OnFileOfferReceived;
+            _chatService.FileAvailableReceived -= OnFileAvailableReceived;
+            _chatService.FileTransferFailedReceived -= OnFileTransferFailedReceived;
             WeakReferenceMessenger.Default.Unregister<ConnectionSuccessMessage>(this);
             _typingClearTimer.Stop();
+            foreach (var cts in _fileTransferCancellations.Values)
+            {
+                cts.Cancel();
+            }
+
+            _fileTransferCancellations.Clear();
             _disposed = true;
         }
     }

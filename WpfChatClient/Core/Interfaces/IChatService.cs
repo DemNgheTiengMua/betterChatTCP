@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using WpfChatClient.Core.Models;
 
 namespace WpfChatClient.Core.Interfaces;
 
@@ -8,6 +9,9 @@ public delegate void PrivateMessageReceivedHandler(string sender, string time, s
 public delegate void UsersUpdatedHandler(string[] users);
 public delegate void UserTypingHandler(string username, bool isTyping);
 public delegate void ConnectionStateHandler();
+public delegate void FileOfferReceivedHandler(FileOfferData offer);
+public delegate void FileAvailableReceivedHandler(FileAvailableData file);
+public delegate void FileTransferFailedReceivedHandler(FileTransferFailedData failure);
 
 public interface IChatService
 {
@@ -17,12 +21,19 @@ public interface IChatService
     event UserTypingHandler UserTyping;
     event ConnectionStateHandler ConnectionLost;
     event ConnectionStateHandler ConnectionRestored;
+    event FileOfferReceivedHandler FileOfferReceived;
+    event FileAvailableReceivedHandler FileAvailableReceived;
+    event FileTransferFailedReceivedHandler FileTransferFailedReceived;
     
     string? CurrentUsername { get; }
+    string? ServerIp { get; }
+    int ServerPort { get; }
+    int FilePort { get; }
     bool IsConnected { get; }
     Task ConnectAsync(string ip, int port, string username);
     Task JoinRoomAsync(string roomId, bool setActive = true);
     Task<string?> SendMessageAsync(string message);
+    Task<bool> SendFileOfferAsync(FileOfferData offer);
     Task SendTypingAsync(bool isTyping);
     void Disconnect();
 }

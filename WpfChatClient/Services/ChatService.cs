@@ -42,8 +42,14 @@ public class ChatService : IChatService
     public event UserTypingHandler? UserTyping;
     public event ConnectionStateHandler? ConnectionLost;
     public event ConnectionStateHandler? ConnectionRestored;
+    public event FileOfferReceivedHandler? FileOfferReceived;
+    public event FileAvailableReceivedHandler? FileAvailableReceived;
+    public event FileTransferFailedReceivedHandler? FileTransferFailedReceived;
 
     public string? CurrentUsername { get; private set; }
+    public string? ServerIp { get; private set; }
+    public int ServerPort { get; private set; }
+    public int FilePort => _lastPort > 0 ? _lastPort + 1 : 5001;
     public bool IsConnected => _isConnected;
 
     public ChatService(MessageCache messageCache)
@@ -75,6 +81,8 @@ public class ChatService : IChatService
             _lastIp = ip;
             _lastPort = port;
             _lastUsername = username;
+            ServerIp = ip;
+            ServerPort = port;
             CurrentUsername = username;
 
             await OpenConnectionLockedAsync().ConfigureAwait(false);
@@ -246,6 +254,30 @@ public class ChatService : IChatService
         }).ConfigureAwait(false);
 
         return sent ? messageId : null;
+    }
+
+    public async Task<bool> SendFileOfferAsync(FileOfferData offer)
+    {
+        if (offer == null)
+        {
+            throw new ArgumentNullException(nameof(offer));
+        }
+
+        var data = new FileOfferData
+        {
+            TransferId = offer.TransferId,
+            FileName = offer.FileName,
+            FileSize = offer.FileSize,
+            Sender = string.IsNullOrWhiteSpace(offer.Sender) ? _lastUsername ?? CurrentUsername ?? string.Empty : offer.Sender,
+            RoomId = string.IsNullOrWhiteSpace(offer.RoomId) ? _activeRoomId : NormalizeRoomId(offer.RoomId),
+            CreatedAt = offer.CreatedAt
+        };
+
+        return await TrySendPacketAsync(new Packet
+        {
+            Type = PacketType.FileOffer,
+            Data = JsonSerializer.SerializeToElement(data)
+        }).ConfigureAwait(false);
     }
 
     public async Task SendTypingAsync(bool isTyping)
@@ -431,6 +463,18 @@ public class ChatService : IChatService
                     _isIntentionallyDisconnected = true;
                     if (rejectedData != null) MessageReceived?.Invoke("SYSTEM", DateTime.Now.ToString("HH:mm"), rejectedData.Message, "", _activeRoomId);
                     break;
+                case PacketType.FileOffer:
+                    var fileOfferData = packet.Data.Deserialize<FileOfferData>();
+                    if (fileOfferData != null) FileOfferReceived?.Invoke(fileOfferData);
+                    break;
+                case PacketType.FileAvailable:
+                    var fileAvailableData = packet.Data.Deserialize<FileAvailableData>();
+                    if (fileAvailableData != null) FileAvailableReceived?.Invoke(fileAvailableData);
+                    break;
+                case PacketType.FileTransferFailed:
+                    var fileTransferFailedData = packet.Data.Deserialize<FileTransferFailedData>();
+                    if (fileTransferFailedData != null) FileTransferFailedReceived?.Invoke(fileTransferFailedData);
+                    break;
                 case PacketType.Heartbeat:
                     break;
             }
@@ -590,6 +634,8 @@ public class ChatService : IChatService
     private void ClearConnectionTarget()
     {
         CurrentUsername = null;
+        ServerIp = null;
+        ServerPort = 0;
         _lastUsername = null;
         _lastIp = null;
         _lastPort = 0;

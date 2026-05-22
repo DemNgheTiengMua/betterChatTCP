@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using ChatServer.FileTransfers;
 
 namespace ChatServer
 {
@@ -28,7 +29,10 @@ namespace ChatServer
         Heartbeat,
         PrivateMessage,
         RoomJoin,
-        ConnectionRejected
+        ConnectionRejected,
+        FileOffer,
+        FileAvailable,
+        FileTransferFailed
     }
 
     public class Packet
@@ -67,6 +71,27 @@ namespace ChatServer
     public class UserListUpdateData { public List<string> Users { get; set; } = new(); }
     public class SystemMessageData { public string Message { get; set; } = string.Empty; }
     public class HeartbeatData { }
+    public class FileOfferData
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string RoomId { get; set; } = string.Empty;
+        public string Sender { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string CreatedAt { get; set; } = string.Empty;
+    }
+    public class FileAvailableData
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string RoomId { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+    }
+    public class FileTransferFailedData
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
+    }
 
 
     // ==========================================
@@ -76,6 +101,7 @@ namespace ChatServer
     {
         public string SessionId { get; } = Guid.NewGuid().ToString();
         public string Username { get; set; } = "Anonymous";
+        public string RemoteAddress { get; }
 
         private readonly TcpClient _client;
         private readonly NetworkStream _stream;
@@ -93,6 +119,7 @@ namespace ChatServer
         {
             _client = client;
             _client.NoDelay = true;
+            RemoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
             _stream = client.GetStream();
             _reader = new StreamReader(_stream, Encoding.UTF8);
             _writer = new StreamWriter(_stream, Encoding.UTF8) { AutoFlush = true };
@@ -283,6 +310,35 @@ namespace ChatServer
             return _sessions.Values.FirstOrDefault(s => s.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
         }
 
+        public bool IsUserInRoomFromAddress(string username, string roomId, string remoteAddress)
+        {
+            if (string.IsNullOrWhiteSpace(username) ||
+                string.IsNullOrWhiteSpace(roomId) ||
+                string.IsNullOrWhiteSpace(remoteAddress) ||
+                !_userSessions.TryGetValue(username, out var sessionId) ||
+                !_sessions.TryGetValue(sessionId, out var session) ||
+                session.IsDisconnectSignaled ||
+                !string.Equals(session.RemoteAddress, remoteAddress, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (roomId.Equals("General", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!_roomMembers.TryGetValue(roomId, out var members))
+            {
+                return false;
+            }
+
+            lock (members)
+            {
+                return members.Contains(sessionId);
+            }
+        }
+
         public IEnumerable<ClientSession> GetAll()
         {
             return _sessions.Values;
@@ -333,11 +389,14 @@ namespace ChatServer
     // ==========================================
     public class MessageRouter
     {
+        private static readonly TimeSpan PendingFileOfferTimeout = TimeSpan.FromMinutes(2);
         private readonly ConnectedClients _clients;
+        private readonly FileMetadataStore _fileMetadataStore;
 
-        public MessageRouter(ConnectedClients clients)
+        public MessageRouter(ConnectedClients clients, FileMetadataStore fileMetadataStore)
         {
             _clients = clients;
+            _fileMetadataStore = fileMetadataStore;
         }
 
         public async Task RouteAsync(ClientSession session, string jsonPayload)
@@ -485,6 +544,51 @@ namespace ChatServer
                         });
                         break;
 
+                    case PacketType.FileOffer:
+                        var fileOfferData = packet.Data.Deserialize<FileOfferData>();
+                        if (fileOfferData != null)
+                        {
+                            fileOfferData.Sender = session.Username;
+                            if (!_fileMetadataStore.TryRegisterOffer(
+                                fileOfferData,
+                                session.Username,
+                                session.RemoteAddress,
+                                out var transferRecord,
+                                out var failureReason) ||
+                                transferRecord == null)
+                            {
+                                LogWarning($"[FILE] Offer rejected from {session.Username}: {failureReason}");
+                                await SendFileTransferFailedAsync(session, fileOfferData, failureReason);
+                                break;
+                            }
+
+                            var responsePacket = new Packet
+                            {
+                                Type = PacketType.FileOffer,
+                                Data = JsonSerializer.SerializeToElement(new FileOfferData
+                                {
+                                    TransferId = transferRecord.TransferId,
+                                    RoomId = transferRecord.RoomId,
+                                    Sender = transferRecord.Sender,
+                                    FileName = transferRecord.SafeFileName,
+                                    FileSize = transferRecord.FileSize,
+                                    CreatedAt = DateTime.Now.ToString("o")
+                                })
+                            };
+
+                            LogInfo($"[FILE] Offer registered: {transferRecord.TransferId} from {transferRecord.Sender} in {transferRecord.RoomId}");
+                            _ = ExpirePendingFileOfferAsync(transferRecord.TransferId, PendingFileOfferTimeout);
+                            if (transferRecord.RoomId.Equals("General", StringComparison.OrdinalIgnoreCase))
+                            {
+                                await _clients.BroadcastAsync(responsePacket);
+                            }
+                            else
+                            {
+                                await _clients.BroadcastToRoomAsync(transferRecord.RoomId, responsePacket);
+                            }
+                        }
+                        break;
+
                     default:
                         LogWarning($"[!] Unhandled packet type received: {packet.Type}");
                         break;
@@ -524,6 +628,85 @@ namespace ChatServer
             });
         }
 
+        public async Task BroadcastFileAvailableAsync(FileTransferRecord record)
+        {
+            var packet = new Packet
+            {
+                Type = PacketType.FileAvailable,
+                Data = JsonSerializer.SerializeToElement(new FileAvailableData
+                {
+                    TransferId = record.TransferId,
+                    RoomId = record.RoomId,
+                    FileName = record.SafeFileName,
+                    FileSize = record.FileSize
+                })
+            };
+
+            await BroadcastFilePacketToRoomAsync(record.RoomId, packet);
+        }
+
+        public async Task BroadcastFileFailedAsync(FileTransferRecord record)
+        {
+            var packet = new Packet
+            {
+                Type = PacketType.FileTransferFailed,
+                Data = JsonSerializer.SerializeToElement(new FileTransferFailedData
+                {
+                    TransferId = record.TransferId,
+                    Reason = record.FailureReason ?? "File transfer failed."
+                })
+            };
+
+            await BroadcastFilePacketToRoomAsync(record.RoomId, packet);
+        }
+
+        private async Task SendFileTransferFailedAsync(ClientSession session, FileOfferData offerData, string failureReason)
+        {
+            await session.SendPacketAsync(new Packet
+            {
+                Type = PacketType.FileTransferFailed,
+                Data = JsonSerializer.SerializeToElement(new FileTransferFailedData
+                {
+                    TransferId = offerData.TransferId,
+                    Reason = failureReason
+                })
+            });
+        }
+
+        private async Task BroadcastFilePacketToRoomAsync(string roomId, Packet packet)
+        {
+            if (roomId.Equals("General", StringComparison.OrdinalIgnoreCase))
+            {
+                await _clients.BroadcastAsync(packet);
+            }
+            else
+            {
+                await _clients.BroadcastToRoomAsync(roomId, packet);
+            }
+        }
+
+        private async Task ExpirePendingFileOfferAsync(string transferId, TimeSpan timeout)
+        {
+            try
+            {
+                await Task.Delay(timeout);
+                if (!_fileMetadataStore.TryGet(transferId, out var record) ||
+                    record.Status != FileTransferStatus.Pending)
+                {
+                    return;
+                }
+
+                if (_fileMetadataStore.TryMarkFailed(transferId, "Upload did not start before the timeout.", out var failedRecord))
+                {
+                    await BroadcastFileFailedAsync(failedRecord);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogWarning($"[FILE] Pending offer expiry failed for {transferId}: {ex.Message}");
+            }
+        }
+
         private static void LogSuccess(string msg) { Console.ForegroundColor = ConsoleColor.Green; Console.WriteLine(msg); Console.ResetColor(); }
         private static void LogInfo(string msg) { Console.ForegroundColor = ConsoleColor.White; Console.WriteLine(msg); Console.ResetColor(); }
         private static void LogMessage(string msg) { Console.ForegroundColor = ConsoleColor.Cyan; Console.WriteLine(msg); Console.ResetColor(); }
@@ -537,20 +720,37 @@ namespace ChatServer
     // ==========================================
     class Program
     {
+        private const int ChatPort = 5000;
+        private const int FilePort = 5001;
         private static readonly ConnectedClients _clients = new();
-        private static readonly MessageRouter _router = new(_clients);
+        private static readonly FileMetadataStore _fileMetadataStore = new(Path.Combine(AppContext.BaseDirectory, "ServerFiles"));
+        private static readonly MessageRouter _router = new(_clients, _fileMetadataStore);
+        private static readonly FileTransferServer _fileTransferServer = new(
+            FilePort,
+            _fileMetadataStore,
+            _clients.IsUserInRoomFromAddress,
+            _router.BroadcastFileAvailableAsync,
+            _router.BroadcastFileFailedAsync);
         private static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(75);
         private static readonly TimeSpan HeartbeatCheckInterval = TimeSpan.FromSeconds(10);
 
         static async Task Main(string[] args)
         {
-            int port = 5000;
-            TcpListener listener = new(IPAddress.Any, port);
+            TcpListener listener = new(IPAddress.Any, ChatPort);
 
             try
             {
+                _fileMetadataStore.CleanupStalePartialFiles();
+                var fileServerTask = _fileTransferServer.StartAsync(CancellationToken.None);
+                await Task.Delay(250);
+                if (fileServerTask.IsFaulted)
+                {
+                    throw fileServerTask.Exception?.GetBaseException() ??
+                        new InvalidOperationException("File transfer server failed to start.");
+                }
+
                 listener.Start();
-                PrintBanner(port);
+                PrintBanner(ChatPort, FilePort);
 
                 while (true)
                 {
@@ -644,14 +844,15 @@ namespace ChatServer
             }
         }
 
-        static void PrintBanner(int port)
+        static void PrintBanner(int chatPort, int filePort)
         {
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("========================================");
             Console.WriteLine("        CLASSROOM TCP CHAT SERVER       ");
             Console.WriteLine("========================================");
             Console.ResetColor();
-            Console.WriteLine($"Server is listening on TCP port {port}");
+            Console.WriteLine($"Chat server is listening on TCP port {chatPort}");
+            Console.WriteLine($"File transfer server is listening on TCP port {filePort}");
             Console.WriteLine();
             Console.WriteLine("Give classmates your Wi-Fi/LAN IPv4 address below, not 127.0.0.1:");
             var addresses = GetLocalIPv4Addresses();

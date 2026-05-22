@@ -26,6 +26,7 @@ public partial class App : Application
         services.AddSingleton<IChatService, ChatService>();
         services.AddSingleton<IEmojiService, EmojiService>();
         services.AddSingleton<IStickerService, StickerService>();
+        services.AddSingleton<IFileTransferService, FileTransferService>();
 
         // Register ViewModels
         services.AddSingleton<MainViewModel>();
