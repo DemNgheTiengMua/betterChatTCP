@@ -176,21 +176,41 @@ public sealed class FileTransferService : IFileTransferService
                 ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, expectedBytes, minBytesInterval, minTimeIntervalTicks, progress);
 
                 long remaining = expectedBytes;
-                int bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
-                Task<int> readTask = networkStream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
                 Task writeTask = Task.CompletedTask;
 
-                int bytesRead = await readTask.ConfigureAwait(false);
-                if (bytesRead == 0 && remaining > 0)
+                while (remaining > 0)
                 {
-                    throw new EndOfStreamException("Server closed the connection before the file was fully downloaded.");
-                }
+                    // Accumulate at least 64 KB (or remaining if less) to prevent writing small TCP packet fragments (e.g. 1.4 KB) to disk.
+                    int targetMin = (int)Math.Min(65536, remaining);
+                    int totalRead = 0;
 
-                while (bytesRead > 0)
-                {
+                    while (totalRead < targetMin)
+                    {
+                        int toRead = (int)Math.Min(currentReadBuffer.Length - totalRead, remaining - totalRead);
+                        int read = await networkStream.ReadAsync(
+                            currentReadBuffer.AsMemory(totalRead, toRead),
+                            cancellationToken).ConfigureAwait(false);
+
+                        if (read == 0)
+                        {
+                            if (totalRead == 0 && remaining > 0)
+                            {
+                                await writeTask.ConfigureAwait(false);
+                                throw new EndOfStreamException("Server closed the connection before the file was fully downloaded.");
+                            }
+                            break;
+                        }
+                        totalRead += read;
+                    }
+
+                    if (totalRead == 0)
+                    {
+                        break;
+                    }
+
                     await writeTask.ConfigureAwait(false);
 
-                    int bytesToWrite = bytesRead;
+                    int bytesToWrite = totalRead;
                     byte[] bufferToWrite = currentReadBuffer;
                     byte[] nextReadBuffer = currentWriteBuffer;
 
@@ -202,21 +222,6 @@ public sealed class FileTransferService : IFileTransferService
                     remaining -= bytesToWrite;
                     transferred += bytesToWrite;
                     ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, expectedBytes, minBytesInterval, minTimeIntervalTicks, progress);
-
-                    if (remaining <= 0)
-                    {
-                        bytesRead = 0;
-                        break;
-                    }
-
-                    bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
-                    readTask = networkStream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
-                    bytesRead = await readTask.ConfigureAwait(false);
-                    if (bytesRead == 0 && remaining > 0)
-                    {
-                        await writeTask.ConfigureAwait(false);
-                        throw new EndOfStreamException("Server closed the connection before the file was fully downloaded.");
-                    }
                 }
                 await writeTask.ConfigureAwait(false);
 

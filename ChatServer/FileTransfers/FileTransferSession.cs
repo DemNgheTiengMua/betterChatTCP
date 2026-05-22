@@ -288,21 +288,41 @@ public sealed class FileTransferSession
         long progressStep = Math.Max(FileMetadataStore.BufferSizeBytes, expectedBytes / 100);
         long nextProgressAt = progressStep;
 
-        int bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
-        Task<int> readTask = stream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
         Task writeTask = Task.CompletedTask;
 
-        int bytesRead = await readTask;
-        if (bytesRead == 0 && remaining > 0)
+        while (remaining > 0)
         {
-            throw new EndOfStreamException("Upload stream ended before all bytes were received.");
-        }
+            // Accumulate at least 64 KB (or remaining if less) to prevent writing small TCP packet fragments (e.g. 1.4 KB) to disk.
+            int targetMin = (int)Math.Min(65536, remaining);
+            int totalRead = 0;
 
-        while (bytesRead > 0)
-        {
+            while (totalRead < targetMin)
+            {
+                int toRead = (int)Math.Min(currentReadBuffer.Length - totalRead, remaining - totalRead);
+                int read = await stream.ReadAsync(
+                    currentReadBuffer.AsMemory(totalRead, toRead),
+                    cancellationToken);
+
+                if (read == 0)
+                {
+                    if (totalRead == 0 && remaining > 0)
+                    {
+                        await writeTask;
+                        throw new EndOfStreamException("Upload stream ended before all bytes were received.");
+                    }
+                    break;
+                }
+                totalRead += read;
+            }
+
+            if (totalRead == 0)
+            {
+                break;
+            }
+
             await writeTask;
 
-            int bytesToWrite = bytesRead;
+            int bytesToWrite = totalRead;
             byte[] bufferToWrite = currentReadBuffer;
             byte[] nextReadBuffer = currentWriteBuffer;
 
@@ -318,21 +338,6 @@ public sealed class FileTransferSession
             {
                 nextProgressAt = received + progressStep;
                 _ = _onProgress(record, received);
-            }
-
-            if (remaining <= 0)
-            {
-                bytesRead = 0;
-                break;
-            }
-
-            bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
-            readTask = stream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
-            bytesRead = await readTask;
-            if (bytesRead == 0 && remaining > 0)
-            {
-                await writeTask;
-                throw new EndOfStreamException("Upload stream ended before all bytes were received.");
             }
         }
         await writeTask;
