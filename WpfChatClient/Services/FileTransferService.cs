@@ -64,7 +64,11 @@ public sealed class FileTransferService : IFileTransferService
             BufferSize,
             useAsync: true);
 
-        var buffer = new byte[BufferSize];
+        var bufferA = new byte[BufferSize];
+        var bufferB = new byte[BufferSize];
+        byte[] currentReadBuffer = bufferA;
+        byte[] currentWriteBuffer = bufferB;
+
         long transferred = 0;
         
         long lastReportedBytes = 0;
@@ -75,18 +79,30 @@ public sealed class FileTransferService : IFileTransferService
 
         ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, fileInfo.Length, minBytesInterval, minTimeIntervalTicks, progress);
 
-        while (true)
-        {
-            int read = await fileStream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-            {
-                break;
-            }
+        Task<int> readTask = fileStream.ReadAsync(currentReadBuffer.AsMemory(0, currentReadBuffer.Length), cancellationToken).AsTask();
+        Task writeTask = Task.CompletedTask;
 
-            await networkStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-            transferred += read;
+        int bytesRead = await readTask.ConfigureAwait(false);
+        while (bytesRead > 0)
+        {
+            await writeTask.ConfigureAwait(false);
+
+            int bytesToWrite = bytesRead;
+            byte[] bufferToWrite = currentReadBuffer;
+            byte[] nextReadBuffer = currentWriteBuffer;
+
+            writeTask = networkStream.WriteAsync(bufferToWrite.AsMemory(0, bytesToWrite), cancellationToken).AsTask();
+
+            currentReadBuffer = nextReadBuffer;
+            currentWriteBuffer = bufferToWrite;
+
+            transferred += bytesToWrite;
             ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, fileInfo.Length, minBytesInterval, minTimeIntervalTicks, progress);
+
+            readTask = fileStream.ReadAsync(currentReadBuffer.AsMemory(0, currentReadBuffer.Length), cancellationToken).AsTask();
+            bytesRead = await readTask.ConfigureAwait(false);
         }
+        await writeTask.ConfigureAwait(false);
 
         // Final 100% progress report
         double percent = fileInfo.Length <= 0 ? 0 : 100;
@@ -144,7 +160,11 @@ public sealed class FileTransferService : IFileTransferService
                 useAsync: true))
             {
                 output.SetLength(expectedBytes); // Pre-allocate file size
-                var buffer = new byte[BufferSize];
+                var bufferA = new byte[BufferSize];
+                var bufferB = new byte[BufferSize];
+                byte[] currentReadBuffer = bufferA;
+                byte[] currentWriteBuffer = bufferB;
+
                 long transferred = 0;
 
                 long lastReportedBytes = 0;
@@ -155,19 +175,50 @@ public sealed class FileTransferService : IFileTransferService
 
                 ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, expectedBytes, minBytesInterval, minTimeIntervalTicks, progress);
 
-                while (transferred < expectedBytes)
+                long remaining = expectedBytes;
+                int bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
+                Task<int> readTask = networkStream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
+                Task writeTask = Task.CompletedTask;
+
+                int bytesRead = await readTask.ConfigureAwait(false);
+                if (bytesRead == 0 && remaining > 0)
                 {
-                    int bytesToRead = (int)Math.Min(buffer.Length, expectedBytes - transferred);
-                    int read = await networkStream.ReadAsync(buffer.AsMemory(0, bytesToRead), cancellationToken).ConfigureAwait(false);
-                    if (read == 0)
+                    throw new EndOfStreamException("Server closed the connection before the file was fully downloaded.");
+                }
+
+                while (bytesRead > 0)
+                {
+                    await writeTask.ConfigureAwait(false);
+
+                    int bytesToWrite = bytesRead;
+                    byte[] bufferToWrite = currentReadBuffer;
+                    byte[] nextReadBuffer = currentWriteBuffer;
+
+                    writeTask = output.WriteAsync(bufferToWrite.AsMemory(0, bytesToWrite), cancellationToken).AsTask();
+
+                    currentReadBuffer = nextReadBuffer;
+                    currentWriteBuffer = bufferToWrite;
+
+                    remaining -= bytesToWrite;
+                    transferred += bytesToWrite;
+                    ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, expectedBytes, minBytesInterval, minTimeIntervalTicks, progress);
+
+                    if (remaining <= 0)
                     {
-                        throw new EndOfStreamException("Server closed the connection before the file was fully downloaded.");
+                        bytesRead = 0;
+                        break;
                     }
 
-                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                    transferred += read;
-                    ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, expectedBytes, minBytesInterval, minTimeIntervalTicks, progress);
+                    bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
+                    readTask = networkStream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
+                    bytesRead = await readTask.ConfigureAwait(false);
+                    if (bytesRead == 0 && remaining > 0)
+                    {
+                        await writeTask.ConfigureAwait(false);
+                        throw new EndOfStreamException("Server closed the connection before the file was fully downloaded.");
+                    }
                 }
+                await writeTask.ConfigureAwait(false);
 
                 // Final 100% progress report
                 double percent = expectedBytes <= 0 ? 0 : 100;

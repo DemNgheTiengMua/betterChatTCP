@@ -229,12 +229,32 @@ public sealed class FileTransferSession
             FileMetadataStore.BufferSizeBytes,
             useAsync: true);
 
-        var buffer = new byte[FileMetadataStore.BufferSizeBytes];
-        int bytesRead;
-        while ((bytesRead = await fileStream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+        var bufferA = new byte[FileMetadataStore.BufferSizeBytes];
+        var bufferB = new byte[FileMetadataStore.BufferSizeBytes];
+        byte[] currentReadBuffer = bufferA;
+        byte[] currentWriteBuffer = bufferB;
+
+        Task<int> readTask = fileStream.ReadAsync(currentReadBuffer.AsMemory(0, currentReadBuffer.Length), cancellationToken).AsTask();
+        Task writeTask = Task.CompletedTask;
+
+        int bytesRead = await readTask;
+        while (bytesRead > 0)
         {
-            await stream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
+            await writeTask;
+
+            int bytesToWrite = bytesRead;
+            byte[] bufferToWrite = currentReadBuffer;
+            byte[] nextReadBuffer = currentWriteBuffer;
+
+            writeTask = stream.WriteAsync(bufferToWrite.AsMemory(0, bytesToWrite), cancellationToken).AsTask();
+
+            currentReadBuffer = nextReadBuffer;
+            currentWriteBuffer = bufferToWrite;
+
+            readTask = fileStream.ReadAsync(currentReadBuffer.AsMemory(0, currentReadBuffer.Length), cancellationToken).AsTask();
+            bytesRead = await readTask;
         }
+        await writeTask;
 
         await stream.FlushAsync(cancellationToken);
         Console.WriteLine($"[FILE] Download completed: {record.TransferId}.");
@@ -257,32 +277,65 @@ public sealed class FileTransferSession
 
         fileStream.SetLength(expectedBytes); // Pre-allocate file size
 
-        var buffer = new byte[FileMetadataStore.BufferSizeBytes];
+        var bufferA = new byte[FileMetadataStore.BufferSizeBytes];
+        var bufferB = new byte[FileMetadataStore.BufferSizeBytes];
+        byte[] currentReadBuffer = bufferA;
+        byte[] currentWriteBuffer = bufferB;
+
         var remaining = expectedBytes;
         long received = 0;
         // Broadcast progress every ~1% (minimum every 256 KB to avoid flooding)
         long progressStep = Math.Max(FileMetadataStore.BufferSizeBytes, expectedBytes / 100);
         long nextProgressAt = progressStep;
 
-        while (remaining > 0)
-        {
-            var readSize = (int)Math.Min(buffer.Length, remaining);
-            var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, readSize), cancellationToken);
-            if (bytesRead == 0)
-            {
-                throw new EndOfStreamException("Upload stream ended before all bytes were received.");
-            }
+        int bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
+        Task<int> readTask = stream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
+        Task writeTask = Task.CompletedTask;
 
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
-            remaining -= bytesRead;
-            received += bytesRead;
+        int bytesRead = await readTask;
+        if (bytesRead == 0 && remaining > 0)
+        {
+            throw new EndOfStreamException("Upload stream ended before all bytes were received.");
+        }
+
+        while (bytesRead > 0)
+        {
+            await writeTask;
+
+            int bytesToWrite = bytesRead;
+            byte[] bufferToWrite = currentReadBuffer;
+            byte[] nextReadBuffer = currentWriteBuffer;
+
+            writeTask = fileStream.WriteAsync(bufferToWrite.AsMemory(0, bytesToWrite), cancellationToken).AsTask();
+
+            currentReadBuffer = nextReadBuffer;
+            currentWriteBuffer = bufferToWrite;
+
+            remaining -= bytesToWrite;
+            received += bytesToWrite;
 
             if (_onProgress != null && received >= nextProgressAt)
             {
                 nextProgressAt = received + progressStep;
                 _ = _onProgress(record, received);
             }
+
+            if (remaining <= 0)
+            {
+                bytesRead = 0;
+                break;
+            }
+
+            bytesToRead = (int)Math.Min(currentReadBuffer.Length, remaining);
+            readTask = stream.ReadAsync(currentReadBuffer.AsMemory(0, bytesToRead), cancellationToken).AsTask();
+            bytesRead = await readTask;
+            if (bytesRead == 0 && remaining > 0)
+            {
+                await writeTask;
+                throw new EndOfStreamException("Upload stream ended before all bytes were received.");
+            }
         }
+        await writeTask;
 
         await fileStream.FlushAsync(cancellationToken);
     }
