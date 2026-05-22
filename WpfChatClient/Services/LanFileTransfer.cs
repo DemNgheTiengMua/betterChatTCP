@@ -17,7 +17,7 @@ public class LanFileTransfer
     /// SENDER: Listens for an incoming connection and sends the file using zero-copy.
     /// Returns the assigned port that the receiver must connect to.
     /// </summary>
-    public static int HostFileZeroCopy(string filePath, out Task hostingTask, CancellationToken cancellationToken = default)
+    public static int HostFileZeroCopy(string filePath, out Task hostingTask, Action? onTransferStarted = null, Action? onTransferCompleted = null, CancellationToken cancellationToken = default)
     {
         var fileInfo = new FileInfo(filePath);
         if (!fileInfo.Exists)
@@ -45,6 +45,7 @@ public class LanFileTransfer
                         {
                             try
                             {
+                                onTransferStarted?.Invoke();
                                 using (clientSocket)
                                 {
                                     clientSocket.SendBufferSize = SocketBufferSize;
@@ -67,6 +68,7 @@ public class LanFileTransfer
 
                                     clientSocket.Shutdown(SocketShutdown.Send);
                                 }
+                                onTransferCompleted?.Invoke();
                             }
                             catch (Exception ex)
                             {
