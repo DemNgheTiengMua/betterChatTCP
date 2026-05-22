@@ -33,7 +33,9 @@ namespace ChatServer
         FileOffer,
         FileAvailable,
         FileTransferFailed,
-        FileUploadProgress
+        FileUploadProgress,
+        FileListRequest,
+        FileListResponse
     }
 
     public class Packet
@@ -114,6 +116,27 @@ namespace ChatServer
         public long BytesReceived { get; set; }
         public long TotalBytes { get; set; }
         public double Percent { get; set; }
+    }
+
+    public class FileListRequestData
+    {
+        public string RoomId { get; set; } = string.Empty;
+    }
+
+    public class FileItemData
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string RoomId { get; set; } = string.Empty;
+        public string Sender { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string CreatedAt { get; set; } = string.Empty;
+    }
+
+    public class FileListResponseData
+    {
+        public string RoomId { get; set; } = string.Empty;
+        public List<FileItemData> Files { get; set; } = new();
     }
 
     // ==========================================
@@ -615,6 +638,35 @@ namespace ChatServer
                         }
                         break;
 
+                    case PacketType.FileListRequest:
+                        var requestData = packet.Data.Deserialize<FileListRequestData>();
+                        if (requestData != null)
+                        {
+                            var roomId = string.IsNullOrWhiteSpace(requestData.RoomId) ? "General" : requestData.RoomId.Trim();
+                            var records = _fileMetadataStore.GetAvailableFilesForRoom(roomId);
+                            var files = records.Select(r => new FileItemData
+                            {
+                                TransferId = r.TransferId,
+                                RoomId = r.RoomId,
+                                Sender = r.Sender,
+                                FileName = r.SafeFileName,
+                                FileSize = r.FileSize,
+                                CreatedAt = r.AvailableUtc?.ToString("o") ?? r.CreatedAtUtc.ToString("o")
+                            }).ToList();
+
+                            await session.SendPacketAsync(new Packet
+                            {
+                                Type = PacketType.FileListResponse,
+                                Data = JsonSerializer.SerializeToElement(new FileListResponseData
+                                {
+                                    RoomId = roomId,
+                                    Files = files
+                                })
+                            });
+                            LogInfo($"[FILE] Sent {files.Count} files metadata for room '{roomId}' to user '{session.Username}'");
+                        }
+                        break;
+
                     default:
                         LogWarning($"[!] Unhandled packet type received: {packet.Type}");
                         break;
@@ -802,6 +854,7 @@ namespace ChatServer
             try
             {
                 _fileMetadataStore.CleanupStalePartialFiles();
+                _fileMetadataStore.LoadMetadataFromDisk();
                 var fileServerTask = _fileTransferServer.StartAsync(CancellationToken.None);
                 await Task.Delay(250);
                 if (fileServerTask.IsFaulted)

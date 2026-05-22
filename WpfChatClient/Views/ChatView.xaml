@@ -905,7 +905,7 @@
         </Grid>
 
         <Border Grid.Column="3"
-                Width="236"
+                Width="246"
                 Margin="10,16,16,16"
                 Opacity="1"
                 Style="{StaticResource LiquidGlassPanel}">
@@ -915,67 +915,292 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" Text="{Binding OnlineHeader}" Foreground="{StaticResource BrightTextSecondary}" FontSize="11" FontWeight="Bold" Margin="16,20,16,10"/>
+                <!-- Premium Segmented Tab Selector -->
+                <Grid Grid.Row="0" Margin="12,16,12,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.ColumnSpan="2" 
+                            Background="#16FFFFFF" 
+                            BorderBrush="{StaticResource BrightGlassBorder}"
+                            BorderThickness="1"
+                            CornerRadius="16" 
+                            Height="38"/>
+                    
+                    <!-- Users Tab Button -->
+                    <Button Grid.Column="0"
+                            Style="{StaticResource FlatRowButtonStyle}"
+                            Height="38"
+                            Command="{Binding ToggleFilesPanelCommand}"
+                            CommandParameter="False">
+                        <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#x1F464;" FontFamily="Segoe UI Emoji" FontSize="12" Margin="0,1,6,0"/>
+                                <TextBlock Text="Users" FontSize="12" FontWeight="SemiBold">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource BrightTextSecondary}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ShowFilesPanel}" Value="False">
+                                                    <Setter Property="Foreground" Value="White"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                            <!-- Selection underline/glow indicator -->
+                            <Border Height="2" Width="40" Background="{StaticResource LiquidAccent}" CornerRadius="1" VerticalAlignment="Bottom" Margin="0,22,0,0">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ShowFilesPanel}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                            </Border>
+                        </Grid>
+                    </Button>
 
-                <ListBox Grid.Row="1" ItemsSource="{Binding Users}" Background="Transparent" BorderThickness="0" Padding="8">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Button Style="{StaticResource FlatRowButtonStyle}"
-                                    Command="{Binding DataContext.ShowProfileCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
-                                    CommandParameter="{Binding Name}">
-                                <StackPanel Orientation="Horizontal" Margin="8,4">
-                                    <Grid Width="32" Height="32" Margin="0,0,12,0">
-                                        <!-- Custom avatar if available -->
-                                        <Ellipse Width="32" Height="32">
-                                            <Ellipse.Style>
-                                                <Style TargetType="Ellipse">
-                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
-                                                            <Setter Property="Visibility" Value="Visible"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Ellipse.Style>
-                                            <Ellipse.Fill>
-                                                <ImageBrush ImageSource="{Binding AvatarPath}" Stretch="UniformToFill"/>
-                                            </Ellipse.Fill>
-                                        </Ellipse>
+                    <!-- Files Tab Button -->
+                    <Button Grid.Column="1"
+                            Style="{StaticResource FlatRowButtonStyle}"
+                            Height="38"
+                            Command="{Binding ToggleFilesPanelCommand}"
+                            CommandParameter="True">
+                        <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#x1F4C1;" FontFamily="Segoe UI Emoji" FontSize="12" Margin="0,1,6,0"/>
+                                <TextBlock Text="Files" FontSize="12" FontWeight="SemiBold">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource BrightTextSecondary}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ShowFilesPanel}" Value="True">
+                                                    <Setter Property="Foreground" Value="White"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                            <!-- Selection underline/glow indicator -->
+                            <Border Height="2" Width="40" Background="{StaticResource LiquidAccent}" CornerRadius="1" VerticalAlignment="Bottom" Margin="0,22,0,0">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ShowFilesPanel}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                            </Border>
+                        </Grid>
+                    </Button>
+                </Grid>
 
-                                        <!-- Fallback deterministic color avatar if no image chosen -->
-                                        <Ellipse Width="32" Height="32">
-                                            <Ellipse.Style>
-                                                <Style TargetType="Ellipse">
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                <!-- Users List Panel -->
+                <Grid Grid.Row="1" Margin="8,0,8,8">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ShowFilesPanel}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="{Binding OnlineHeader}" Foreground="{StaticResource BrightTextSecondary}" FontSize="11" FontWeight="Bold" Margin="8,4,8,8"/>
+                        <ListBox Grid.Row="1" ItemsSource="{Binding Users}" Background="Transparent" BorderThickness="0" Padding="0">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Style="{StaticResource FlatRowButtonStyle}"
+                                            Command="{Binding DataContext.ShowProfileCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                            CommandParameter="{Binding Name}">
+                                        <StackPanel Orientation="Horizontal" Margin="8,6">
+                                            <Grid Width="32" Height="32" Margin="0,0,12,0">
+                                                <Ellipse Width="32" Height="32">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
                                                             <Setter Property="Visibility" Value="Collapsed"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Ellipse.Style>
-                                            <Ellipse.Fill>
-                                                <Binding Path="Color"/>
-                                            </Ellipse.Fill>
-                                        </Ellipse>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                    <Ellipse.Fill>
+                                                        <ImageBrush ImageSource="{Binding AvatarPath}" Stretch="UniformToFill"/>
+                                                    </Ellipse.Fill>
+                                                </Ellipse>
 
-                                        <Ellipse Width="9"
-                                                 Height="9"
-                                                 Fill="#22C55E"
-                                                 Stroke="#20242A"
-                                                 StrokeThickness="2"
-                                                 HorizontalAlignment="Right"
-                                                 VerticalAlignment="Bottom"/>
-                                    </Grid>
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center" Foreground="{StaticResource BrightTextPrimary}" FontSize="14"/>
-                                        <TextBlock Text="{Binding Status}" Foreground="{StaticResource BrightTextSecondary}" FontSize="11"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Button>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                                                <Ellipse Width="32" Height="32">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                    <Ellipse.Fill>
+                                                        <Binding Path="Color"/>
+                                                    </Ellipse.Fill>
+                                                </Ellipse>
+
+                                                <Ellipse Width="9" Height="9" Fill="#22C55E" Stroke="#20242A" StrokeThickness="2"
+                                                         HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+                                            </Grid>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource BrightTextPrimary}" FontSize="13" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding Status}" Foreground="{StaticResource BrightTextSecondary}" FontSize="10"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Grid>
+
+                <!-- Shared Files List Panel -->
+                <Grid Grid.Row="1" Margin="8,0,8,8">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ShowFilesPanel}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <TextBlock Grid.Row="0" Text="SHARED FILES IN ROOM" Foreground="{StaticResource BrightTextSecondary}" FontSize="11" FontWeight="Bold" Margin="8,4,8,8"/>
+                        
+                        <!-- Empty State message -->
+                        <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="10,20">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SharedFiles.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="&#x1F4E6;" FontSize="32" TextAlignment="Center" Margin="0,0,0,10" Opacity="0.6"/>
+                            <TextBlock Text="No files shared yet." Foreground="{StaticResource BrightTextSecondary}" FontSize="12" HorizontalAlignment="Center" TextAlignment="Center"/>
+                            <TextBlock Text="Attach files in chat to upload!" Foreground="{StaticResource BrightTextSecondary}" FontSize="10" HorizontalAlignment="Center" Margin="0,4,0,0" TextAlignment="Center" Opacity="0.7"/>
+                        </StackPanel>
+
+                        <!-- Scrollable Files List -->
+                        <ListBox Grid.Row="1" 
+                                 ItemsSource="{Binding SharedFiles}" 
+                                 Background="Transparent" 
+                                 BorderThickness="0" 
+                                 Padding="0"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="#14FFFFFF" BorderThickness="0,0,0,1" Padding="4,8" Margin="0,0,0,4">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- File Icon -->
+                                            <Border Grid.RowSpan="2" Grid.Column="0" Width="32" Height="32" CornerRadius="8" Background="#16FFFFFF" Margin="0,0,10,0" VerticalAlignment="Top">
+                                                <TextBlock Text="&#x1F4C4;" FontFamily="Segoe UI Emoji" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+
+                                            <!-- File Name & Info -->
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding FileName}" Foreground="{StaticResource BrightTextPrimary}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding FileName}"/>
+                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                    <TextBlock Text="{Binding SizeText}" Foreground="{StaticResource BrightTextSecondary}" FontSize="10"/>
+                                                    <TextBlock Text=" • by " Foreground="{StaticResource BrightTextSecondary}" FontSize="10" Opacity="0.7"/>
+                                                    <TextBlock Text="{Binding Sender}" Foreground="{StaticResource BrightTextSecondary}" FontSize="10" FontWeight="SemiBold"/>
+                                                </StackPanel>
+                                            </StackPanel>
+
+                                            <!-- Action Button -->
+                                            <Button Grid.RowSpan="2" Grid.Column="2" 
+                                                    Command="{Binding DataContext.DownloadFileCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Download file"
+                                                    VerticalAlignment="Center">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource FlatRowButtonStyle}">
+                                                        <Setter Property="Padding" Value="8,6"/>
+                                                        <Setter Property="Background" Value="{StaticResource LiquidAccentSoft}"/>
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding CanDownload}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                                <TextBlock Text="&#x2913;" FontFamily="Segoe UI Symbol" FontSize="14" Foreground="White" FontWeight="Bold"/>
+                                            </Button>
+
+                                            <!-- Progress Section -->
+                                            <Grid Grid.Row="2" Grid.ColumnSpan="3" Margin="0,6,0,0">
+                                                <Grid.Style>
+                                                    <Style TargetType="Grid">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Grid.Style>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <ProgressBar Grid.Column="0" Height="4" Minimum="0" Maximum="100" Value="{Binding Progress}" VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding StatusText}" Foreground="{StaticResource BrightTextSecondary}" FontSize="9" Margin="6,0,0,0"/>
+                                                </Grid>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Grid>
             </Grid>
         </Border>
 

@@ -13,6 +13,7 @@ public delegate void FileOfferReceivedHandler(FileOfferData offer);
 public delegate void FileAvailableReceivedHandler(FileAvailableData file);
 public delegate void FileTransferFailedReceivedHandler(FileTransferFailedData failure);
 public delegate void FileUploadProgressReceivedHandler(FileUploadProgressData progress);
+public delegate void FileListResponseReceivedHandler(FileListResponseData response);
 
 public interface IChatService
 {
@@ -26,6 +27,7 @@ public interface IChatService
     event FileAvailableReceivedHandler FileAvailableReceived;
     event FileTransferFailedReceivedHandler FileTransferFailedReceived;
     event FileUploadProgressReceivedHandler FileUploadProgressReceived;
+    event FileListResponseReceivedHandler FileListResponseReceived;
     
     string? CurrentUsername { get; }
     string? ServerIp { get; }
@@ -37,5 +39,6 @@ public interface IChatService
     Task<string?> SendMessageAsync(string message);
     Task<bool> SendFileOfferAsync(FileOfferData offer);
     Task SendTypingAsync(bool isTyping);
+    Task RequestFileListAsync(string roomId);
     void Disconnect();
 }

@@ -74,6 +74,9 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     [NotifyPropertyChangedFor(nameof(OwnFirstLetter))]
     private string? _myAvatarPath;
 
+    [ObservableProperty]
+    private bool _showFilesPanel;
+
     public string OwnUsername => _chatService?.CurrentUsername ?? "Guest";
 
     public string OwnFirstLetter => string.IsNullOrWhiteSpace(OwnUsername) ? "?" : OwnUsername.Substring(0, 1).ToUpperInvariant();
@@ -83,6 +86,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     public ObservableCollection<ToastNotification> Toasts { get; } = new();
     public ObservableCollection<RoomItem> Rooms { get; } = new();
     public ObservableCollection<StickerItem> Stickers { get; } = new();
+    public ObservableCollection<FileTransferItem> SharedFiles { get; } = new();
 
     public ChatViewModel(
         IChatService chatService,
@@ -109,6 +113,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         _chatService.FileAvailableReceived += OnFileAvailableReceived;
         _chatService.FileTransferFailedReceived += OnFileTransferFailedReceived;
         _chatService.FileUploadProgressReceived += OnFileUploadProgressReceived;
+        _chatService.FileListResponseReceived += OnFileListResponseReceived;
 
         IsConnected = _chatService.IsConnected;
         if (IsConnected)
@@ -249,6 +254,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         if (_chatService.IsConnected)
         {
             await _chatService.JoinRoomAsync(normalizedRoomId);
+            await _chatService.RequestFileListAsync(normalizedRoomId);
         }
 
         await LoadRoomHistoryAsync(normalizedRoomId);
@@ -377,6 +383,14 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         transfer.Status = FileTransferUiStatus.Available;
         transfer.Progress = 100;
         transfer.StatusText = transfer.IsOwn ? "Uploaded" : "Ready to download";
+
+        if (string.Equals(transfer.RoomId, CurrentRoomId, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!SharedFiles.Contains(transfer))
+            {
+                SharedFiles.Add(transfer);
+            }
+        }
 
         if (!transfer.IsOwn && IsImageFile(transfer.FileName))
         {
@@ -576,6 +590,10 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     {
         await JoinAllRoomsAsync();
         await LoadRoomHistoryAsync(CurrentRoomId);
+        if (_chatService.IsConnected)
+        {
+            await _chatService.RequestFileListAsync(CurrentRoomId);
+        }
     }
 
     private void OnConnectionLost()
@@ -770,6 +788,59 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         {
             MarkFileAvailable(file);
         });
+    }
+
+    private void OnFileListResponseReceived(FileListResponseData response)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+        dispatcher.BeginInvoke(() =>
+        {
+            if (!string.Equals(response.RoomId, CurrentRoomId, StringComparison.OrdinalIgnoreCase)) return;
+
+            SharedFiles.Clear();
+            foreach (var f in response.Files)
+            {
+                if (_fileTransfers.TryGetValue(f.TransferId, out var existingTransfer))
+                {
+                    if (!SharedFiles.Contains(existingTransfer))
+                    {
+                        SharedFiles.Add(existingTransfer);
+                    }
+                }
+                else
+                {
+                    var item = new FileTransferItem
+                    {
+                        TransferId = f.TransferId,
+                        FileName = f.FileName,
+                        FileSize = f.FileSize,
+                        Sender = f.Sender,
+                        RoomId = f.RoomId,
+                        Status = FileTransferUiStatus.Available,
+                        StatusText = "Ready to download",
+                        IsOwn = string.Equals(f.Sender, _chatService.CurrentUsername, StringComparison.OrdinalIgnoreCase)
+                    };
+                    _fileTransfers[f.TransferId] = item;
+                    SharedFiles.Add(item);
+                }
+            }
+        });
+    }
+
+    [RelayCommand]
+    private void ToggleFilesPanel(object? showObj)
+    {
+        bool show = false;
+        if (showObj is bool b) show = b;
+        else if (showObj is string s) bool.TryParse(s, out show);
+
+        ShowFilesPanel = show;
+        if (show && _chatService.IsConnected)
+        {
+            _ = _chatService.RequestFileListAsync(CurrentRoomId);
+        }
     }
 
     private void OnFileTransferFailedReceived(FileTransferFailedData failure)
@@ -1335,6 +1406,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             _chatService.FileAvailableReceived -= OnFileAvailableReceived;
             _chatService.FileTransferFailedReceived -= OnFileTransferFailedReceived;
             _chatService.FileUploadProgressReceived -= OnFileUploadProgressReceived;
+            _chatService.FileListResponseReceived -= OnFileListResponseReceived;
             WeakReferenceMessenger.Default.Unregister<ConnectionSuccessMessage>(this);
             _typingClearTimer.Stop();
             foreach (var cts in _fileTransferCancellations.Values)

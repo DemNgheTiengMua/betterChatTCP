@@ -46,6 +46,7 @@ public class ChatService : IChatService
     public event FileAvailableReceivedHandler? FileAvailableReceived;
     public event FileTransferFailedReceivedHandler? FileTransferFailedReceived;
     public event FileUploadProgressReceivedHandler? FileUploadProgressReceived;
+    public event FileListResponseReceivedHandler? FileListResponseReceived;
 
     public string? CurrentUsername { get; private set; }
     public string? ServerIp { get; private set; }
@@ -124,6 +125,18 @@ public class ChatService : IChatService
         }).ConfigureAwait(false);
 
         if (sent && setActive) _activeRoomId = normalizedRoomId;
+    }
+
+    public async Task RequestFileListAsync(string roomId)
+    {
+        await TrySendPacketAsync(new Packet
+        {
+            Type = PacketType.FileListRequest,
+            Data = JsonSerializer.SerializeToElement(new FileListRequestData
+            {
+                RoomId = string.IsNullOrWhiteSpace(roomId) ? _activeRoomId : NormalizeRoomId(roomId)
+            })
+        }).ConfigureAwait(false);
     }
 
     private async Task OpenConnectionLockedAsync()
@@ -526,6 +539,10 @@ public class ChatService : IChatService
                 case PacketType.FileUploadProgress:
                     var fileUploadProgressData = packet.Data.Deserialize<FileUploadProgressData>();
                     if (fileUploadProgressData != null) FileUploadProgressReceived?.Invoke(fileUploadProgressData);
+                    break;
+                case PacketType.FileListResponse:
+                    var fileListResponseData = packet.Data.Deserialize<FileListResponseData>();
+                    if (fileListResponseData != null) FileListResponseReceived?.Invoke(fileListResponseData);
                     break;
                 case PacketType.Heartbeat:
                     break;

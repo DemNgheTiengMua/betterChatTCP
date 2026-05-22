@@ -20,7 +20,9 @@ public enum PacketType
     FileOffer,
     FileAvailable,
     FileTransferFailed,
-    FileUploadProgress
+    FileUploadProgress,
+    FileListRequest,
+    FileListResponse
 }
 
 public class Packet
@@ -111,3 +113,25 @@ public class FileUploadProgressData
     public long TotalBytes { get; set; }
     public double Percent { get; set; }
 }
+
+public class FileListRequestData
+{
+    public string RoomId { get; set; } = string.Empty;
+}
+
+public class FileItemData
+{
+    public string TransferId { get; set; } = string.Empty;
+    public string RoomId { get; set; } = string.Empty;
+    public string Sender { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public string CreatedAt { get; set; } = string.Empty;
+}
+
+public class FileListResponseData
+{
+    public string RoomId { get; set; } = string.Empty;
+    public List<FileItemData> Files { get; set; } = new();
+}
+

@@ -1,4 +1,9 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace ChatServer.FileTransfers;
 
@@ -118,6 +123,76 @@ public sealed class FileMetadataStore
         return false;
     }
 
+    public List<FileTransferRecord> GetAvailableFilesForRoom(string roomId)
+    {
+        return _records.Values
+            .Where(r => r.Status == FileTransferStatus.Available &&
+                        string.Equals(r.RoomId, roomId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private class MetadataDto
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string SafeTransferId { get; set; } = string.Empty;
+        public string RoomId { get; set; } = string.Empty;
+        public string Sender { get; set; } = string.Empty;
+        public string SenderAddress { get; set; } = string.Empty;
+        public string OriginalFileName { get; set; } = string.Empty;
+        public string SafeFileName { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public DateTime CreatedAtUtc { get; set; }
+        public DateTime? AvailableUtc { get; set; }
+    }
+
+    public void LoadMetadataFromDisk()
+    {
+        if (!Directory.Exists(StorageRoot)) return;
+
+        foreach (var dir in Directory.GetDirectories(StorageRoot))
+        {
+            if (Path.GetFileName(dir).Equals(".partial", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var metadataPath = Path.Combine(dir, "metadata.json");
+            if (File.Exists(metadataPath))
+            {
+                try
+                {
+                    var json = File.ReadAllText(metadataPath);
+                    var dto = JsonSerializer.Deserialize<MetadataDto>(json);
+                    if (dto != null && !string.IsNullOrWhiteSpace(dto.TransferId))
+                    {
+                        var completedPath = Path.Combine(dir, dto.SafeFileName);
+                        if (File.Exists(completedPath))
+                        {
+                            var record = new FileTransferRecord
+                            {
+                                TransferId = dto.TransferId,
+                                SafeTransferId = dto.SafeTransferId,
+                                RoomId = dto.RoomId,
+                                Sender = dto.Sender,
+                                SenderAddress = dto.SenderAddress,
+                                OriginalFileName = dto.OriginalFileName,
+                                SafeFileName = dto.SafeFileName,
+                                FileSize = dto.FileSize,
+                                CreatedAtUtc = dto.CreatedAtUtc,
+                                AvailableUtc = dto.AvailableUtc,
+                                Status = FileTransferStatus.Available,
+                                FinalPath = completedPath
+                            };
+                            _records.TryAdd(record.TransferId, record);
+                            Console.WriteLine($"[FILE] Loaded available file from disk: {record.SafeFileName} ({record.FileSize} bytes) for Room: {record.RoomId}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[FILE] Failed to load metadata from {metadataPath}: {ex.Message}");
+                }
+            }
+        }
+    }
+
     public bool TryClaimUpload(string transferId, out FileTransferRecord record, out string failureReason)
     {
         failureReason = string.Empty;
@@ -154,6 +229,34 @@ public sealed class FileMetadataStore
             record.AvailableUtc = DateTime.UtcNow;
             record.FailureReason = null;
             record.FailedUtc = null;
+        }
+
+        try
+        {
+            var dir = Path.GetDirectoryName(completedFilePath);
+            if (dir != null)
+            {
+                var metadataPath = Path.Combine(dir, "metadata.json");
+                var dto = new MetadataDto
+                {
+                    TransferId = record.TransferId,
+                    SafeTransferId = record.SafeTransferId,
+                    RoomId = record.RoomId,
+                    Sender = record.Sender,
+                    SenderAddress = record.SenderAddress,
+                    OriginalFileName = record.OriginalFileName,
+                    SafeFileName = record.SafeFileName,
+                    FileSize = record.FileSize,
+                    CreatedAtUtc = record.CreatedAtUtc,
+                    AvailableUtc = record.AvailableUtc
+                };
+                var json = JsonSerializer.Serialize(dto);
+                File.WriteAllText(metadataPath, json);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[FILE] Failed to save metadata for {transferId}: {ex.Message}");
         }
 
         return true;

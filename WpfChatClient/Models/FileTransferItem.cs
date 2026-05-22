@@ -42,7 +42,7 @@ public partial class FileTransferItem : ObservableObject
 
     public string SizeText => FormatFileSize(FileSize);
     public bool IsBusy => Status is FileTransferUiStatus.Uploading or FileTransferUiStatus.Downloading;
-    public bool CanDownload => Status == FileTransferUiStatus.Available && !IsOwn;
+    public bool CanDownload => Status == FileTransferUiStatus.Available;
     public bool CanCancel => Status is FileTransferUiStatus.Uploading or FileTransferUiStatus.Downloading;
 
     public static string FormatFileSize(long bytes)
