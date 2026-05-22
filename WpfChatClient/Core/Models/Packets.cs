@@ -30,7 +30,11 @@ public class Packet
     public JsonElement Data { get; set; }
 }
 
-public class JoinData { public string Username { get; set; } = string.Empty; }
+public class JoinData
+{
+    public string Username { get; set; } = string.Empty;
+    public string? AvatarBase64 { get; set; }
+}
 
 public class ChatMessageData
 {
@@ -61,7 +65,16 @@ public class TypingData
     public bool IsTyping { get; set; }
 }
 
-public class UserListUpdateData { public List<string> Users { get; set; } = new(); }
+public class UserInfoData
+{
+    public string Username { get; set; } = string.Empty;
+    public string? AvatarBase64 { get; set; }
+}
+
+public class UserListUpdateData
+{
+    public List<UserInfoData> Users { get; set; } = new();
+}
 public class SystemMessageData { public string Message { get; set; } = string.Empty; }
 public class HeartbeatData { }
 

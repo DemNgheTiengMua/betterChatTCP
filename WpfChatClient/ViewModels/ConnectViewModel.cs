@@ -194,7 +194,7 @@ public partial class ConnectViewModel : ObservableObject
             // Save avatar locally before connecting
             SaveAvatarLocally();
 
-            await _chatService.ConnectAsync(ip, port, Username.Trim());
+            await _chatService.ConnectAsync(ip, port, Username.Trim(), AvatarPath);
 
             // Signal successful connection (with Username and AvatarPath)
             WeakReferenceMessenger.Default.Send(new ConnectionSuccessMessage(Username.Trim(), AvatarPath));

@@ -58,7 +58,9 @@ public class ChatService : IChatService
         _messageCache = messageCache;
     }
 
-    public async Task ConnectAsync(string ip, int port, string username)
+    private string? _lastAvatarPath;
+
+    public async Task ConnectAsync(string ip, int port, string username, string? avatarPath = null)
     {
         Console.WriteLine($"[CLIENT] connect requested: {ip}:{port} as {username}");
 
@@ -82,6 +84,7 @@ public class ChatService : IChatService
             _lastIp = ip;
             _lastPort = port;
             _lastUsername = username;
+            _lastAvatarPath = avatarPath;
             ServerIp = ip;
             ServerPort = port;
             CurrentUsername = username;
@@ -143,10 +146,27 @@ public class ChatService : IChatService
             writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
             cts = new CancellationTokenSource();
 
+            string? avatarBase64 = null;
+            if (!string.IsNullOrWhiteSpace(_lastAvatarPath) && File.Exists(_lastAvatarPath))
+            {
+                try
+                {
+                    avatarBase64 = Convert.ToBase64String(File.ReadAllBytes(_lastAvatarPath));
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[AVATAR] Base64 encoding failed: {ex.Message}");
+                }
+            }
+
             await WritePacketAsync(writer, new Packet
             {
                 Type = PacketType.Join,
-                Data = JsonSerializer.SerializeToElement(new JoinData { Username = _lastUsername! })
+                Data = JsonSerializer.SerializeToElement(new JoinData 
+                { 
+                    Username = _lastUsername!,
+                    AvatarBase64 = avatarBase64
+                })
             }).ConfigureAwait(false);
 
             await WaitForJoinAcceptedAsync(reader, cts.Token).ConfigureAwait(false);
@@ -236,7 +256,7 @@ public class ChatService : IChatService
         }
 
         var userData = packet.Data.Deserialize<UserListUpdateData>();
-        return userData?.Users.Exists(user => string.Equals(user, _lastUsername, StringComparison.OrdinalIgnoreCase)) == true;
+        return userData?.Users.Exists(user => string.Equals(user.Username, _lastUsername, StringComparison.OrdinalIgnoreCase)) == true;
     }
 
     public async Task<string?> SendMessageAsync(string message)
@@ -448,7 +468,34 @@ public class ChatService : IChatService
                     break;
                 case PacketType.UserListUpdate:
                     var userData = packet.Data.Deserialize<UserListUpdateData>();
-                    if (userData != null) UsersUpdated?.Invoke(userData.Users.ToArray());
+                    if (userData != null)
+                    {
+                        var usernames = new List<string>();
+                        var avatarDir = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "ChatTCP", "Avatars");
+                        Directory.CreateDirectory(avatarDir);
+
+                        foreach (var u in userData.Users)
+                        {
+                            usernames.Add(u.Username);
+                            if (!string.IsNullOrWhiteSpace(u.AvatarBase64))
+                            {
+                                try
+                                {
+                                    var bytes = Convert.FromBase64String(u.AvatarBase64);
+                                    var filePath = Path.Combine(avatarDir, $"{u.Username}.png");
+                                    File.WriteAllBytes(filePath, bytes);
+                                    Console.WriteLine($"[AVATAR] Saved received avatar for {u.Username}");
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[AVATAR] Failed to save avatar for {u.Username}: {ex.Message}");
+                                }
+                            }
+                        }
+                        UsersUpdated?.Invoke(usernames.ToArray());
+                    }
                     break;
                 case PacketType.Typing:
                     var typingData = packet.Data.Deserialize<TypingData>();

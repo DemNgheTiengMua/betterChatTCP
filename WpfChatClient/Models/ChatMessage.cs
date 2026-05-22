@@ -14,7 +14,9 @@ public record ChatMessage(
     string StickerName = "",
     string StickerAccentColor = "#5865F2",
     bool IsFile = false,
-    FileTransferItem? FileTransfer = null)
+    FileTransferItem? FileTransfer = null,
+    bool IsImage = false,
+    string ImagePath = "")
 {
-    public bool IsText => !IsSticker && !IsFile;
+    public bool IsText => !IsSticker && !IsFile && !IsImage;
 }

@@ -9,8 +9,8 @@ namespace WpfChatClient.Services;
 
 public sealed class FileTransferService : IFileTransferService
 {
-    private const int BufferSize = 262_144;        // 256 KB chunk size
-    private const int SocketBufferSize = 524_288;  // 512 KB socket buffer
+    private const int BufferSize = 1_048_576;      // 1 MB chunk size
+    private const int SocketBufferSize = 4_194_304; // 4 MB socket buffer
     private const long MaxFileSizeBytes = 10L * 1024 * 1024 * 1024;
 
     public async Task UploadFileAsync(
@@ -66,7 +66,14 @@ public sealed class FileTransferService : IFileTransferService
 
         var buffer = new byte[BufferSize];
         long transferred = 0;
-        ReportProgress(progress, transferred, fileInfo.Length);
+        
+        long lastReportedBytes = 0;
+        long lastReportTime = System.Diagnostics.Stopwatch.GetTimestamp();
+        long minBytesInterval = Math.Max(65536, fileInfo.Length / 200); // 0.5% steps
+        long ticksPerMs = System.Diagnostics.Stopwatch.Frequency / 1000;
+        long minTimeIntervalTicks = ticksPerMs * 100; // 100ms interval
+
+        ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, fileInfo.Length, minBytesInterval, minTimeIntervalTicks, progress);
 
         while (true)
         {
@@ -78,8 +85,12 @@ public sealed class FileTransferService : IFileTransferService
 
             await networkStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             transferred += read;
-            ReportProgress(progress, transferred, fileInfo.Length);
+            ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, fileInfo.Length, minBytesInterval, minTimeIntervalTicks, progress);
         }
+
+        // Final 100% progress report
+        double percent = fileInfo.Length <= 0 ? 0 : 100;
+        progress?.Report(new FileTransferProgress(fileInfo.Length, fileInfo.Length, percent));
 
         await networkStream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -132,9 +143,17 @@ public sealed class FileTransferService : IFileTransferService
                 BufferSize,
                 useAsync: true))
             {
+                output.SetLength(expectedBytes); // Pre-allocate file size
                 var buffer = new byte[BufferSize];
                 long transferred = 0;
-                ReportProgress(progress, transferred, expectedBytes);
+
+                long lastReportedBytes = 0;
+                long lastReportTime = System.Diagnostics.Stopwatch.GetTimestamp();
+                long minBytesInterval = Math.Max(65536, expectedBytes / 200); // 0.5% steps
+                long ticksPerMs = System.Diagnostics.Stopwatch.Frequency / 1000;
+                long minTimeIntervalTicks = ticksPerMs * 100; // 100ms interval
+
+                ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, expectedBytes, minBytesInterval, minTimeIntervalTicks, progress);
 
                 while (transferred < expectedBytes)
                 {
@@ -147,8 +166,12 @@ public sealed class FileTransferService : IFileTransferService
 
                     await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                     transferred += read;
-                    ReportProgress(progress, transferred, expectedBytes);
+                    ReportProgressThrottled(ref lastReportedBytes, ref lastReportTime, transferred, expectedBytes, minBytesInterval, minTimeIntervalTicks, progress);
                 }
+
+                // Final 100% progress report
+                double percent = expectedBytes <= 0 ? 0 : 100;
+                progress?.Report(new FileTransferProgress(expectedBytes, expectedBytes, percent));
 
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -216,13 +239,26 @@ public sealed class FileTransferService : IFileTransferService
         }
     }
 
-    private static void ReportProgress(
-        IProgress<FileTransferProgress>? progress,
-        long bytesTransferred,
-        long totalBytes)
+    private static void ReportProgressThrottled(
+        ref long lastReportedBytes,
+        ref long lastReportTime,
+        long transferred,
+        long totalBytes,
+        long minBytesInterval,
+        long minTimeIntervalTicks,
+        IProgress<FileTransferProgress>? progress)
     {
-        double percent = totalBytes <= 0 ? 0 : Math.Min(100, bytesTransferred * 100d / totalBytes);
-        progress?.Report(new FileTransferProgress(bytesTransferred, totalBytes, percent));
+        long currentTime = System.Diagnostics.Stopwatch.GetTimestamp();
+        long elapsedTicks = currentTime - lastReportTime;
+        long bytesSinceLastReport = transferred - lastReportedBytes;
+
+        if (transferred == totalBytes || bytesSinceLastReport >= minBytesInterval || elapsedTicks >= minTimeIntervalTicks)
+        {
+            lastReportedBytes = transferred;
+            lastReportTime = currentTime;
+            double percent = totalBytes <= 0 ? 0 : Math.Min(100, transferred * 100d / totalBytes);
+            progress?.Report(new FileTransferProgress(transferred, totalBytes, percent));
+        }
     }
 
     private static void SafeDelete(string path)

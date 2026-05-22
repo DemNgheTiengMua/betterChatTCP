@@ -5,7 +5,7 @@ namespace ChatServer.FileTransfers;
 
 public sealed class FileTransferSession
 {
-    private const int SocketBufferSize = 524_288; // 512 KB
+    private const int SocketBufferSize = 4_194_304; // 4 MB
     private readonly TcpClient _client;
     private readonly FileMetadataStore _metadataStore;
     private readonly Func<string, string, string, bool> _isUserInRoomFromAddress;
@@ -254,6 +254,8 @@ public sealed class FileTransferSession
             FileShare.None,
             FileMetadataStore.BufferSizeBytes,
             useAsync: true);
+
+        fileStream.SetLength(expectedBytes); // Pre-allocate file size
 
         var buffer = new byte[FileMetadataStore.BufferSizeBytes];
         var remaining = expectedBytes;

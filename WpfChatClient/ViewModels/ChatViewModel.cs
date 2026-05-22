@@ -278,8 +278,17 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         return new ChatMessage(sender, content, time, isOwn, messageId, GetAvatarColor(sender));
     }
 
+    private static bool IsImageFile(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return false;
+        var ext = Path.GetExtension(fileName).ToLower();
+        return ext is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".webp";
+    }
+
     private ChatMessage CreateFileMessage(FileTransferItem transfer)
     {
+        bool isImage = IsImageFile(transfer.FileName);
+
         return new ChatMessage(
             transfer.Sender,
             transfer.FileName,
@@ -287,8 +296,10 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             transfer.IsOwn,
             transfer.TransferId,
             GetAvatarColor(transfer.Sender),
-            IsFile: true,
-            FileTransfer: transfer);
+            IsFile: !isImage,
+            FileTransfer: transfer,
+            IsImage: isImage,
+            ImagePath: (isImage && transfer.IsOwn) ? transfer.LocalPath : "");
     }
 
     private void AddOrUpdateFileOffer(FileOfferData offer)
@@ -366,6 +377,85 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         transfer.Status = FileTransferUiStatus.Available;
         transfer.Progress = 100;
         transfer.StatusText = transfer.IsOwn ? "Uploaded" : "Ready to download";
+
+        if (!transfer.IsOwn && IsImageFile(transfer.FileName))
+        {
+            var cacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ChatTCP", "ImageCache");
+            Directory.CreateDirectory(cacheDir);
+            var localCachedPath = Path.Combine(cacheDir, $"{file.TransferId}{Path.GetExtension(file.FileName)}");
+
+            transfer.Status = FileTransferUiStatus.Downloading;
+            transfer.StatusText = "Downloading preview...";
+            
+            _ = AutoDownloadImageAsync(transfer, localCachedPath);
+        }
+    }
+
+    private async Task AutoDownloadImageAsync(FileTransferItem transfer, string destinationPath)
+    {
+        var serverIp = _chatService.ServerIp;
+        if (string.IsNullOrWhiteSpace(serverIp)) return;
+
+        try
+        {
+            await _fileTransferService.DownloadFileAsync(
+                new FileDownloadRequest(
+                    serverIp,
+                    _chatService.FilePort,
+                    transfer.TransferId,
+                    _chatService.CurrentUsername ?? string.Empty,
+                    transfer.RoomId,
+                    destinationPath),
+                null,
+                CancellationToken.None);
+
+            transfer.LocalPath = destinationPath;
+            transfer.Status = FileTransferUiStatus.Downloaded;
+            transfer.StatusText = "Downloaded";
+            
+            UpdateMessageWithImagePath(transfer.TransferId, destinationPath);
+        }
+        catch (Exception ex)
+        {
+            transfer.Status = FileTransferUiStatus.Failed;
+            transfer.StatusText = "Preview failed";
+            transfer.ErrorMessage = ex.Message;
+        }
+    }
+
+    private void UpdateMessageWithImagePath(string transferId, string localPath)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+        dispatcher.BeginInvoke(() =>
+        {
+            // Update in active room messages list
+            for (int i = 0; i < Messages.Count; i++)
+            {
+                var msg = Messages[i];
+                if (msg.MessageId == transferId)
+                {
+                    Messages[i] = msg with { IsImage = true, IsFile = false, ImagePath = localPath };
+                }
+            }
+
+            // Update in all cached room histories
+            foreach (var roomId in _roomMessages.Keys)
+            {
+                var list = _roomMessages[roomId];
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var msg = list[i];
+                    if (msg.MessageId == transferId)
+                    {
+                        list[i] = msg with { IsImage = true, IsFile = false, ImagePath = localPath };
+                    }
+                }
+            }
+        });
     }
 
     private void MarkFileFailed(FileTransferFailedData failure)
@@ -1163,11 +1253,39 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             content.Contains("@" + username, StringComparison.OrdinalIgnoreCase);
     }
 
+    private string? GetOtherUserAvatarPath(string username)
+    {
+        try
+        {
+            var avatarDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ChatTCP", "Avatars");
+
+            var possiblePaths = new[]
+            {
+                Path.Combine(avatarDir, $"{username}.png"),
+                Path.Combine(avatarDir, $"{username}.jpg"),
+                Path.Combine(avatarDir, $"{username}.jpeg"),
+                Path.Combine(avatarDir, $"{username}.bmp")
+            };
+
+            foreach (var path in possiblePaths)
+            {
+                if (File.Exists(path))
+                {
+                    return path;
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
     private User CreateUser(string username)
     {
         var isTyping = _typingUsers.Contains(username);
         var isMe = string.Equals(username, _chatService.CurrentUsername, StringComparison.OrdinalIgnoreCase);
-        return new User(username, GetAvatarColor(username), isTyping ? "Typing" : "Online", isTyping, isMe ? MyAvatarPath : null);
+        return new User(username, GetAvatarColor(username), isTyping ? "Typing" : "Online", isTyping, isMe ? MyAvatarPath : GetOtherUserAvatarPath(username));
     }
 
     private void RefreshKnownUser(string username)

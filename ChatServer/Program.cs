@@ -43,7 +43,11 @@ namespace ChatServer
         public JsonElement Data { get; set; }
     }
 
-    public class JoinData { public string Username { get; set; } = string.Empty; }
+    public class JoinData
+    {
+        public string Username { get; set; } = string.Empty;
+        public string? AvatarBase64 { get; set; }
+    }
     public class ChatMessageData
     {
         public string MessageId { get; set; } = string.Empty;
@@ -69,7 +73,15 @@ namespace ChatServer
         public string Username { get; set; } = string.Empty;
         public bool IsTyping { get; set; }
     }
-    public class UserListUpdateData { public List<string> Users { get; set; } = new(); }
+    public class UserInfoData
+    {
+        public string Username { get; set; } = string.Empty;
+        public string? AvatarBase64 { get; set; }
+    }
+    public class UserListUpdateData
+    {
+        public List<UserInfoData> Users { get; set; } = new();
+    }
     public class SystemMessageData { public string Message { get; set; } = string.Empty; }
     public class HeartbeatData { }
     public class FileOfferData
@@ -111,6 +123,7 @@ namespace ChatServer
     {
         public string SessionId { get; } = Guid.NewGuid().ToString();
         public string Username { get; set; } = "Anonymous";
+        public string? AvatarBase64 { get; set; }
         public string RemoteAddress { get; }
 
         private readonly TcpClient _client;
@@ -424,6 +437,9 @@ namespace ChatServer
                         {
                             var requestedUsername = joinData.Username.Trim();
                             bool isFirstJoin = session.Username == "Anonymous";
+                            
+                            session.AvatarBase64 = joinData.AvatarBase64;
+
                             if (!_clients.TryRegisterUsername(session, requestedUsername))
                             {
                                 LogWarning($"[DUPLICATE] rejected session {session.SessionId} for username '{requestedUsername}'");
@@ -616,16 +632,26 @@ namespace ChatServer
 
         public async Task BroadcastUserListAsync()
         {
-            var users = new HashSet<string>();
+            var list = new List<UserInfoData>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var s in _clients.GetAll())
             {
-                if (s.Username != "Anonymous") users.Add(s.Username);
+                if (s.Username != "Anonymous" && !seen.Contains(s.Username))
+                {
+                    seen.Add(s.Username);
+                    list.Add(new UserInfoData
+                    {
+                        Username = s.Username,
+                        AvatarBase64 = s.AvatarBase64
+                    });
+                }
             }
 
             await _clients.BroadcastAsync(new Packet
             {
                 Type = PacketType.UserListUpdate,
-                Data = JsonSerializer.SerializeToElement(new UserListUpdateData { Users = new List<string>(users) })
+                Data = JsonSerializer.SerializeToElement(new UserListUpdateData { Users = list })
             });
         }
 
@@ -842,7 +868,25 @@ namespace ChatServer
                         });
 
                         var bytes = Encoding.UTF8.GetBytes(response);
-                        await udp.SendAsync(bytes, bytes.Length, result.RemoteEndPoint);
+
+                        // Send from all active local IP interfaces to ensure the client receives the reply with the correct source IP
+                        foreach (var addrInfo in GetLocalIPv4Addresses())
+                        {
+                            try
+                            {
+                                if (IPAddress.TryParse(addrInfo.Address, out var localIp))
+                                {
+                                    using var senderUdp = new UdpClient(new IPEndPoint(localIp, 0));
+                                    await senderUdp.SendAsync(bytes, bytes.Length, result.RemoteEndPoint);
+                                    Console.WriteLine($"[DISCOVERY] Responded from interface {addrInfo.InterfaceName} ({addrInfo.Address}) to client {result.RemoteEndPoint}");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log but continue so other interfaces are not blocked
+                                Console.WriteLine($"[DISCOVERY] Interface send failed for {addrInfo.Address}: {ex.Message}");
+                            }
+                        }
                     }
                     catch (OperationCanceledException)
                     {

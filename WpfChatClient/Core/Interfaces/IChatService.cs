@@ -32,7 +32,7 @@ public interface IChatService
     int ServerPort { get; }
     int FilePort { get; }
     bool IsConnected { get; }
-    Task ConnectAsync(string ip, int port, string username);
+    Task ConnectAsync(string ip, int port, string username, string? avatarPath = null);
     Task JoinRoomAsync(string roomId, bool setActive = true);
     Task<string?> SendMessageAsync(string message);
     Task<bool> SendFileOfferAsync(FileOfferData offer);

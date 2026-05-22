@@ -43,6 +43,24 @@ public class ServerDiscoveryService
              var probeBytes = Encoding.UTF8.GetBytes(DiscoveryProbe);
              await udpClient.SendAsync(probeBytes, probeBytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort));
  
+             // Also send directed broadcasts to all local interfaces (e.g. 192.168.1.255)
+             try
+             {
+                 foreach (var ip in GetLocalIPv4Addresses())
+                 {
+                     var parts = ip.Split('.');
+                     if (parts.Length == 4)
+                     {
+                         var directedBroadcast = $"{parts[0]}.{parts[1]}.{parts[2]}.255";
+                         if (IPAddress.TryParse(directedBroadcast, out var directedEp))
+                         {
+                             await udpClient.SendAsync(probeBytes, probeBytes.Length, new IPEndPoint(directedEp, DiscoveryPort));
+                         }
+                     }
+                 }
+             }
+             catch { }
+
              // Also try sending to localhost for same-machine servers
              try
              {
@@ -108,5 +126,23 @@ public class ServerDiscoveryService
          }
  
          return servers;
+     }
+
+     private List<string> GetLocalIPv4Addresses()
+     {
+         var ips = new List<string>();
+         try
+         {
+             var host = Dns.GetHostEntry(Dns.GetHostName());
+             foreach (var ip in host.AddressList)
+             {
+                 if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+                 {
+                     ips.Add(ip.ToString());
+                 }
+             }
+         }
+         catch { }
+         return ips;
      }
 }

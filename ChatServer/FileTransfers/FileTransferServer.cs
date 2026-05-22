@@ -5,7 +5,7 @@ namespace ChatServer.FileTransfers;
 
 public sealed class FileTransferServer
 {
-    private const int SocketBufferSize = 524_288; // 512 KB
+    private const int SocketBufferSize = 4_194_304; // 4 MB
     private readonly int _port;
     private readonly FileMetadataStore _metadataStore;
     private readonly Func<string, string, string, bool> _isUserInRoomFromAddress;

@@ -678,6 +678,86 @@
                                             </Grid>
                                         </Grid>
                                     </Border>
+
+                                    <Border CornerRadius="14"
+                                            BorderThickness="1"
+                                            BorderBrush="{StaticResource BrightGlassBorder}"
+                                            Background="#1AFFFFFF"
+                                            Padding="4"
+                                            Margin="0,4,0,0"
+                                            HorizontalAlignment="Left"
+                                            MaxWidth="328">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsImage}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsOwn}" Value="True">
+                                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Grid>
+                                            <Border CornerRadius="10" Background="#26FFFFFF" Width="300" Height="200" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding ImagePath}" Value="">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding ImagePath}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                    <TextBlock Text="&#x29FE;" FontSize="36" Foreground="{StaticResource BrightTextSecondary}" HorizontalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                                                        <TextBlock.RenderTransform>
+                                                            <RotateTransform x:Name="SpinnerTransform" Angle="0"/>
+                                                        </TextBlock.RenderTransform>
+                                                        <TextBlock.Triggers>
+                                                            <EventTrigger RoutedEvent="Loaded">
+                                                                <BeginStoryboard>
+                                                                    <Storyboard>
+                                                                        <DoubleAnimation Storyboard.TargetName="SpinnerTransform"
+                                                                                         Storyboard.TargetProperty="Angle"
+                                                                                         From="0" To="360" Duration="0:0:2"
+                                                                                         RepeatBehavior="Forever"/>
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </EventTrigger>
+                                                        </TextBlock.Triggers>
+                                                    </TextBlock>
+                                                    <TextBlock Text="Loading image preview..." Foreground="{StaticResource BrightTextSecondary}" FontSize="12" Margin="0,10,0,0"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <Border CornerRadius="10" ClipToBounds="True">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding ImagePath}" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding ImagePath}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <Image Source="{Binding ImagePath}"
+                                                       Stretch="Uniform"
+                                                       MaxWidth="300"
+                                                       MaxHeight="250"/>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
                                 </StackPanel>
                             </Border>
                         </Grid>
