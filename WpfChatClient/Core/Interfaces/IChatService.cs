@@ -12,6 +12,7 @@ public delegate void ConnectionStateHandler();
 public delegate void FileOfferReceivedHandler(FileOfferData offer);
 public delegate void FileAvailableReceivedHandler(FileAvailableData file);
 public delegate void FileTransferFailedReceivedHandler(FileTransferFailedData failure);
+public delegate void FileUploadProgressReceivedHandler(FileUploadProgressData progress);
 
 public interface IChatService
 {
@@ -24,6 +25,7 @@ public interface IChatService
     event FileOfferReceivedHandler FileOfferReceived;
     event FileAvailableReceivedHandler FileAvailableReceived;
     event FileTransferFailedReceivedHandler FileTransferFailedReceived;
+    event FileUploadProgressReceivedHandler FileUploadProgressReceived;
     
     string? CurrentUsername { get; }
     string? ServerIp { get; }

@@ -5,24 +5,28 @@ namespace ChatServer.FileTransfers;
 
 public sealed class FileTransferSession
 {
+    private const int SocketBufferSize = 524_288; // 512 KB
     private readonly TcpClient _client;
     private readonly FileMetadataStore _metadataStore;
     private readonly Func<string, string, string, bool> _isUserInRoomFromAddress;
     private readonly Func<FileTransferRecord, Task> _onAvailable;
     private readonly Func<FileTransferRecord, Task> _onFailed;
+    private readonly Func<FileTransferRecord, long, Task>? _onProgress;
 
     public FileTransferSession(
         TcpClient client,
         FileMetadataStore metadataStore,
         Func<string, string, string, bool> isUserInRoomFromAddress,
         Func<FileTransferRecord, Task> onAvailable,
-        Func<FileTransferRecord, Task> onFailed)
+        Func<FileTransferRecord, Task> onFailed,
+        Func<FileTransferRecord, long, Task>? onProgress = null)
     {
         _client = client;
         _metadataStore = metadataStore;
         _isUserInRoomFromAddress = isUserInRoomFromAddress;
         _onAvailable = onAvailable;
         _onFailed = onFailed;
+        _onProgress = onProgress;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -32,6 +36,8 @@ public sealed class FileTransferSession
         try
         {
             client.NoDelay = true;
+            client.SendBufferSize = SocketBufferSize;
+            client.ReceiveBufferSize = SocketBufferSize;
             await using var stream = client.GetStream();
             var remoteAddress = (client.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString() ?? string.Empty;
 
@@ -130,7 +136,7 @@ public sealed class FileTransferSession
             }, cancellationToken);
 
             Console.WriteLine($"[FILE] Upload started: {record.TransferId} ({record.SafeFileName}, {record.FileSize} bytes).");
-            await ReceiveExactFileAsync(stream, partialPath, record.FileSize, cancellationToken);
+            await ReceiveExactFileAsync(stream, partialPath, record.FileSize, record, cancellationToken);
 
             var completedDirectory = _metadataStore.GetCompletedDirectory(record);
             Directory.CreateDirectory(completedDirectory);
@@ -238,6 +244,7 @@ public sealed class FileTransferSession
         NetworkStream stream,
         string partialPath,
         long expectedBytes,
+        FileTransferRecord record,
         CancellationToken cancellationToken)
     {
         await using var fileStream = new FileStream(
@@ -250,6 +257,11 @@ public sealed class FileTransferSession
 
         var buffer = new byte[FileMetadataStore.BufferSizeBytes];
         var remaining = expectedBytes;
+        long received = 0;
+        // Broadcast progress every ~1% (minimum every 256 KB to avoid flooding)
+        long progressStep = Math.Max(FileMetadataStore.BufferSizeBytes, expectedBytes / 100);
+        long nextProgressAt = progressStep;
+
         while (remaining > 0)
         {
             var readSize = (int)Math.Min(buffer.Length, remaining);
@@ -261,6 +273,13 @@ public sealed class FileTransferSession
 
             await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
             remaining -= bytesRead;
+            received += bytesRead;
+
+            if (_onProgress != null && received >= nextProgressAt)
+            {
+                nextProgressAt = received + progressStep;
+                _ = _onProgress(record, received);
+            }
         }
 
         await fileStream.FlushAsync(cancellationToken);

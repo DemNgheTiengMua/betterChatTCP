@@ -45,6 +45,7 @@ public class ChatService : IChatService
     public event FileOfferReceivedHandler? FileOfferReceived;
     public event FileAvailableReceivedHandler? FileAvailableReceived;
     public event FileTransferFailedReceivedHandler? FileTransferFailedReceived;
+    public event FileUploadProgressReceivedHandler? FileUploadProgressReceived;
 
     public string? CurrentUsername { get; private set; }
     public string? ServerIp { get; private set; }
@@ -474,6 +475,10 @@ public class ChatService : IChatService
                 case PacketType.FileTransferFailed:
                     var fileTransferFailedData = packet.Data.Deserialize<FileTransferFailedData>();
                     if (fileTransferFailedData != null) FileTransferFailedReceived?.Invoke(fileTransferFailedData);
+                    break;
+                case PacketType.FileUploadProgress:
+                    var fileUploadProgressData = packet.Data.Deserialize<FileUploadProgressData>();
+                    if (fileUploadProgressData != null) FileUploadProgressReceived?.Invoke(fileUploadProgressData);
                     break;
                 case PacketType.Heartbeat:
                     break;

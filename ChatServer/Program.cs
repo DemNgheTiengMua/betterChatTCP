@@ -32,7 +32,8 @@ namespace ChatServer
         ConnectionRejected,
         FileOffer,
         FileAvailable,
-        FileTransferFailed
+        FileTransferFailed,
+        FileUploadProgress
     }
 
     public class Packet
@@ -93,6 +94,15 @@ namespace ChatServer
         public string Reason { get; set; } = string.Empty;
     }
 
+    public class FileUploadProgressData
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string RoomId { get; set; } = string.Empty;
+        public string Sender { get; set; } = string.Empty;
+        public long BytesReceived { get; set; }
+        public long TotalBytes { get; set; }
+        public double Percent { get; set; }
+    }
 
     // ==========================================
     // 2. CLIENT SESSION MANAGEMENT
@@ -660,6 +670,26 @@ namespace ChatServer
             await BroadcastFilePacketToRoomAsync(record.RoomId, packet);
         }
 
+        public async Task BroadcastFileUploadProgressAsync(FileTransferRecord record, long bytesReceived)
+        {
+            double percent = record.FileSize <= 0 ? 0 : Math.Min(100.0, bytesReceived * 100.0 / record.FileSize);
+            var packet = new Packet
+            {
+                Type = PacketType.FileUploadProgress,
+                Data = JsonSerializer.SerializeToElement(new FileUploadProgressData
+                {
+                    TransferId = record.TransferId,
+                    RoomId = record.RoomId,
+                    Sender = record.Sender,
+                    BytesReceived = bytesReceived,
+                    TotalBytes = record.FileSize,
+                    Percent = percent
+                })
+            };
+
+            await BroadcastFilePacketToRoomAsync(record.RoomId, packet);
+        }
+
         private async Task SendFileTransferFailedAsync(ClientSession session, FileOfferData offerData, string failureReason)
         {
             await session.SendPacketAsync(new Packet
@@ -722,6 +752,10 @@ namespace ChatServer
     {
         private const int ChatPort = 5000;
         private const int FilePort = 5001;
+        private const int DiscoveryPort = 5002;
+        private const string DiscoveryProbe = "CHAT_DISCOVER_V1";
+        private const string ServerName = "Classroom Chat";
+
         private static readonly ConnectedClients _clients = new();
         private static readonly FileMetadataStore _fileMetadataStore = new(Path.Combine(AppContext.BaseDirectory, "ServerFiles"));
         private static readonly MessageRouter _router = new(_clients, _fileMetadataStore);
@@ -730,7 +764,8 @@ namespace ChatServer
             _fileMetadataStore,
             _clients.IsUserInRoomFromAddress,
             _router.BroadcastFileAvailableAsync,
-            _router.BroadcastFileFailedAsync);
+            _router.BroadcastFileFailedAsync,
+            _router.BroadcastFileUploadProgressAsync);
         private static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(75);
         private static readonly TimeSpan HeartbeatCheckInterval = TimeSpan.FromSeconds(10);
 
@@ -748,6 +783,9 @@ namespace ChatServer
                     throw fileServerTask.Exception?.GetBaseException() ??
                         new InvalidOperationException("File transfer server failed to start.");
                 }
+
+                // Start UDP discovery responder in the background
+                _ = Task.Run(() => DiscoveryListenerAsync(CancellationToken.None));
 
                 listener.Start();
                 PrintBanner(ChatPort, FilePort);
@@ -767,6 +805,53 @@ namespace ChatServer
                 Console.WriteLine($"[CRITICAL] Server failed: {ex.Message}");
                 Console.ResetColor();
             }
+        }
+
+        static async Task DiscoveryListenerAsync(CancellationToken cancellationToken)
+        {
+            using var udp = new UdpClient(DiscoveryPort);
+            udp.EnableBroadcast = true;
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            Console.WriteLine($"[DISCOVERY] UDP listener started on port {DiscoveryPort}");
+            Console.ResetColor();
+
+            // Determine the best local IPv4 to advertise
+            string advertisedIp = GetLocalIPv4Addresses().FirstOrDefault().Address ?? "127.0.0.1";
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await udp.ReceiveAsync(cancellationToken);
+                    var message = Encoding.UTF8.GetString(result.Buffer);
+
+                    if (!string.Equals(message.Trim(), DiscoveryProbe, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    Console.WriteLine($"[DISCOVERY] Probe from {result.RemoteEndPoint}");
+
+                    var response = JsonSerializer.Serialize(new
+                    {
+                        ServerName,
+                        Ip = advertisedIp,
+                        Port = ChatPort,
+                        OnlineCount = _clients.UserCount
+                    });
+
+                    var bytes = Encoding.UTF8.GetBytes(response);
+                    await udp.SendAsync(bytes, bytes.Length, result.RemoteEndPoint);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[DISCOVERY] Error: {ex.Message}");
+                }
+            }
+
+            Console.WriteLine("[DISCOVERY] UDP listener stopped");
         }
 
         static async Task HandleClientAsync(TcpClient tcpClient)
@@ -853,6 +938,9 @@ namespace ChatServer
             Console.ResetColor();
             Console.WriteLine($"Chat server is listening on TCP port {chatPort}");
             Console.WriteLine($"File transfer server is listening on TCP port {filePort}");
+            Console.ForegroundColor = ConsoleColor.DarkCyan;
+            Console.WriteLine($"Auto-discovery is listening on UDP port {DiscoveryPort}  (clients find you automatically)");
+            Console.ResetColor();
             Console.WriteLine();
             Console.WriteLine("Give classmates your Wi-Fi/LAN IPv4 address below, not 127.0.0.1:");
             var addresses = GetLocalIPv4Addresses();

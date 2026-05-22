@@ -4,4 +4,5 @@ public record UserProfileCard(
     string Name,
     string AvatarColor,
     string Status,
-    bool IsTyping);
+    bool IsTyping,
+    string? AvatarPath = null);

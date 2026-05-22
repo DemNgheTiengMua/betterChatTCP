@@ -283,6 +283,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Border Height="48" BorderBrush="{StaticResource GlassBorderBrush}" BorderThickness="0,0,0,1">
                     <TextBlock Text="WPF CHAT" VerticalAlignment="Center" Margin="16,0" FontWeight="Bold" Foreground="{StaticResource BrightTextPrimary}"/>
@@ -326,6 +327,81 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                 </StackPanel>
+
+                <!-- Own profile bar at the bottom -->
+                <Border Grid.Row="2"
+                        Background="#0DFFFFFF"
+                        BorderBrush="{StaticResource GlassBorderBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="14,12"
+                        CornerRadius="0,0,18,18">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <Grid Grid.Column="0" Width="36" Height="36" Margin="0,0,10,0">
+                            <!-- Custom avatar if available -->
+                            <Ellipse Width="36" Height="36">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding MyAvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                                <Ellipse.Fill>
+                                    <ImageBrush ImageSource="{Binding MyAvatarPath}" Stretch="UniformToFill"/>
+                                </Ellipse.Fill>
+                            </Ellipse>
+
+                            <!-- Fallback deterministic color avatar if no image chosen -->
+                            <Ellipse Width="36" Height="36">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding MyAvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                                <Ellipse.Fill>
+                                    <SolidColorBrush Color="#7C8CFF"/>
+                                </Ellipse.Fill>
+                            </Ellipse>
+
+                            <TextBlock Text="{Binding OwnFirstLetter}"
+                                       FontWeight="Bold" FontSize="14" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding MyAvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+
+                            <!-- Active status indicator dot -->
+                            <Ellipse Width="10" Height="10" Fill="#22C55E" Stroke="#20242A" StrokeThickness="2"
+                                     HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-2,-2"/>
+                        </Grid>
+                        
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding OwnUsername}" FontWeight="Bold" FontSize="13" Foreground="{StaticResource BrightTextPrimary}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="Online" FontSize="11" Foreground="#4ECDC4"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
             </Grid>
         </Border>
 
@@ -769,7 +845,40 @@
                                     CommandParameter="{Binding Name}">
                                 <StackPanel Orientation="Horizontal" Margin="8,4">
                                     <Grid Width="32" Height="32" Margin="0,0,12,0">
-                                        <Ellipse Fill="{Binding Color}"/>
+                                        <!-- Custom avatar if available -->
+                                        <Ellipse Width="32" Height="32">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                            <Ellipse.Fill>
+                                                <ImageBrush ImageSource="{Binding AvatarPath}" Stretch="UniformToFill"/>
+                                            </Ellipse.Fill>
+                                        </Ellipse>
+
+                                        <!-- Fallback deterministic color avatar if no image chosen -->
+                                        <Ellipse Width="32" Height="32">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                            <Ellipse.Fill>
+                                                <Binding Path="Color"/>
+                                            </Ellipse.Fill>
+                                        </Ellipse>
+
                                         <Ellipse Width="9"
                                                  Height="9"
                                                  Fill="#22C55E"
@@ -823,7 +932,41 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="48" Height="48" Fill="{Binding AvatarColor}" Margin="0,0,12,0"/>
+                        <Grid Width="48" Height="48" Margin="0,0,12,0">
+                            <!-- Custom avatar if available -->
+                            <Ellipse Width="48" Height="48">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                                <Ellipse.Fill>
+                                    <ImageBrush ImageSource="{Binding AvatarPath}" Stretch="UniformToFill"/>
+                                </Ellipse.Fill>
+                            </Ellipse>
+
+                            <!-- Fallback deterministic color avatar if no image chosen -->
+                            <Ellipse Width="48" Height="48">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding AvatarPath, Converter={StaticResource StringToVisibilityConverter}}" Value="Visible">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                                <Ellipse.Fill>
+                                    <Binding Path="AvatarColor"/>
+                                </Ellipse.Fill>
+                            </Ellipse>
+                        </Grid>
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="{Binding Name}" Foreground="{StaticResource BrightTextPrimary}" FontWeight="SemiBold" FontSize="16"/>
                             <TextBlock Text="{Binding Status}" Foreground="{StaticResource BrightTextSecondary}" FontSize="12" Margin="0,2,0,0"/>

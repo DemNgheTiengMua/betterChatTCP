@@ -69,6 +69,15 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     [ObservableProperty]
     private bool _isStickerPickerOpen;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OwnUsername))]
+    [NotifyPropertyChangedFor(nameof(OwnFirstLetter))]
+    private string? _myAvatarPath;
+
+    public string OwnUsername => _chatService?.CurrentUsername ?? "Guest";
+
+    public string OwnFirstLetter => string.IsNullOrWhiteSpace(OwnUsername) ? "?" : OwnUsername.Substring(0, 1).ToUpperInvariant();
+
     public ObservableCollection<ChatMessage> Messages { get; } = new();
     public ObservableCollection<User> Users { get; } = new();
     public ObservableCollection<ToastNotification> Toasts { get; } = new();
@@ -99,6 +108,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         _chatService.FileOfferReceived += OnFileOfferReceived;
         _chatService.FileAvailableReceived += OnFileAvailableReceived;
         _chatService.FileTransferFailedReceived += OnFileTransferFailedReceived;
+        _chatService.FileUploadProgressReceived += OnFileUploadProgressReceived;
 
         IsConnected = _chatService.IsConnected;
         if (IsConnected)
@@ -457,6 +467,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher == null)
         {
+            MyAvatarPath = message.AvatarPath;
             IsConnected = true;
             _ = InitializeAfterConnectAsync();
             return;
@@ -464,6 +475,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
 
         dispatcher.BeginInvoke(() =>
         {
+            MyAvatarPath = message.AvatarPath;
             IsConnected = true;
             _hasConnectedOnce = true;
             _ = InitializeAfterConnectAsync();
@@ -679,6 +691,31 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
         {
             MarkFileFailed(failure);
             AddToast("File failed", failure.Reason, "system", "file");
+        });
+    }
+
+    private void OnFileUploadProgressReceived(FileUploadProgressData progressData)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+        dispatcher.BeginInvoke(() =>
+        {
+            if (!_fileTransfers.TryGetValue(progressData.TransferId, out var transfer))
+            {
+                return;
+            }
+
+            // Only update for the non-uploader side (uploader tracks its own local progress)
+            if (transfer.IsOwn) return;
+
+            if (transfer.Status == FileTransferUiStatus.Pending ||
+                transfer.Status == FileTransferUiStatus.Uploading)
+            {
+                transfer.Status = FileTransferUiStatus.Uploading;
+                transfer.Progress = progressData.Percent;
+                transfer.StatusText = $"Uploading {progressData.Percent:0}%";
+            }
         });
     }
 
@@ -1061,11 +1098,13 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
 
         var profileName = username == "You" ? _chatService.CurrentUsername ?? username : username;
         var isTyping = _typingUsers.Contains(profileName);
+        var isMe = string.Equals(profileName, _chatService.CurrentUsername, StringComparison.OrdinalIgnoreCase);
         SelectedProfile = new UserProfileCard(
             profileName,
             GetAvatarColor(profileName),
             isTyping ? "Typing" : "Online",
-            isTyping);
+            isTyping,
+            isMe ? MyAvatarPath : null);
         IsProfileCardOpen = true;
     }
 
@@ -1127,7 +1166,8 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
     private User CreateUser(string username)
     {
         var isTyping = _typingUsers.Contains(username);
-        return new User(username, GetAvatarColor(username), isTyping ? "Typing" : "Online", isTyping);
+        var isMe = string.Equals(username, _chatService.CurrentUsername, StringComparison.OrdinalIgnoreCase);
+        return new User(username, GetAvatarColor(username), isTyping ? "Typing" : "Online", isTyping, isMe ? MyAvatarPath : null);
     }
 
     private void RefreshKnownUser(string username)
@@ -1176,6 +1216,7 @@ public partial class ChatViewModel : ObservableObject, IDisposable, IRecipient<C
             _chatService.FileOfferReceived -= OnFileOfferReceived;
             _chatService.FileAvailableReceived -= OnFileAvailableReceived;
             _chatService.FileTransferFailedReceived -= OnFileTransferFailedReceived;
+            _chatService.FileUploadProgressReceived -= OnFileUploadProgressReceived;
             WeakReferenceMessenger.Default.Unregister<ConnectionSuccessMessage>(this);
             _typingClearTimer.Stop();
             foreach (var cts in _fileTransferCancellations.Values)

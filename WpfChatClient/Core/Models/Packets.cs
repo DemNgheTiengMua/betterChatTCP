@@ -19,7 +19,8 @@ public enum PacketType
     ConnectionRejected,
     FileOffer,
     FileAvailable,
-    FileTransferFailed
+    FileTransferFailed,
+    FileUploadProgress
 }
 
 public class Packet
@@ -86,4 +87,14 @@ public class FileTransferFailedData
 {
     public string TransferId { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
+}
+
+public class FileUploadProgressData
+{
+    public string TransferId { get; set; } = string.Empty;
+    public string RoomId { get; set; } = string.Empty;
+    public string Sender { get; set; } = string.Empty;
+    public long BytesReceived { get; set; }
+    public long TotalBytes { get; set; }
+    public double Percent { get; set; }
 }

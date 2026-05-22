@@ -1,8 +1,13 @@
-using CommunityToolkit.Mvvm.Messaging.Messages;
-
 namespace WpfChatClient.Messages;
 
-public class ConnectionSuccessMessage : ValueChangedMessage<string>
+public class ConnectionSuccessMessage
 {
-    public ConnectionSuccessMessage(string username) : base(username) { }
+    public string Username { get; }
+    public string? AvatarPath { get; }
+
+    public ConnectionSuccessMessage(string username, string? avatarPath)
+    {
+        Username = username;
+        AvatarPath = avatarPath;
+    }
 }

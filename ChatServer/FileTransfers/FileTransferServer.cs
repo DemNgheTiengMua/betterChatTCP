@@ -5,11 +5,13 @@ namespace ChatServer.FileTransfers;
 
 public sealed class FileTransferServer
 {
+    private const int SocketBufferSize = 524_288; // 512 KB
     private readonly int _port;
     private readonly FileMetadataStore _metadataStore;
     private readonly Func<string, string, string, bool> _isUserInRoomFromAddress;
     private readonly Func<FileTransferRecord, Task> _onAvailable;
     private readonly Func<FileTransferRecord, Task> _onFailed;
+    private readonly Func<FileTransferRecord, long, Task>? _onProgress;
     private TcpListener? _listener;
 
     public FileTransferServer(
@@ -17,13 +19,15 @@ public sealed class FileTransferServer
         FileMetadataStore metadataStore,
         Func<string, string, string, bool> isUserInRoomFromAddress,
         Func<FileTransferRecord, Task> onAvailable,
-        Func<FileTransferRecord, Task> onFailed)
+        Func<FileTransferRecord, Task> onFailed,
+        Func<FileTransferRecord, long, Task>? onProgress = null)
     {
         _port = port;
         _metadataStore = metadataStore;
         _isUserInRoomFromAddress = isUserInRoomFromAddress;
         _onAvailable = onAvailable;
         _onFailed = onFailed;
+        _onProgress = onProgress;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -38,9 +42,11 @@ public sealed class FileTransferServer
             while (!cancellationToken.IsCancellationRequested)
             {
                 var client = await _listener.AcceptTcpClientAsync(cancellationToken);
+                client.SendBufferSize = SocketBufferSize;
+                client.ReceiveBufferSize = SocketBufferSize;
                 Console.WriteLine("[FILE] File transfer connection accepted.");
 
-                var session = new FileTransferSession(client, _metadataStore, _isUserInRoomFromAddress, _onAvailable, _onFailed);
+                var session = new FileTransferSession(client, _metadataStore, _isUserInRoomFromAddress, _onAvailable, _onFailed, _onProgress);
                 _ = Task.Run(() => session.RunAsync(cancellationToken), cancellationToken);
             }
         }
