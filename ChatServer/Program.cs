@@ -752,8 +752,8 @@ namespace ChatServer
     {
         private const int ChatPort = 5000;
         private const int FilePort = 5001;
-        private const int DiscoveryPort = 5002;
-        private const string DiscoveryProbe = "CHAT_DISCOVER_V1";
+        private const int DiscoveryPort = 5001;
+        private const string DiscoveryProbe = "CHATTCP_DISCOVER";
         private const string ServerName = "Classroom Chat";
 
         private static readonly ConnectedClients _clients = new();
@@ -809,46 +809,60 @@ namespace ChatServer
 
         static async Task DiscoveryListenerAsync(CancellationToken cancellationToken)
         {
-            using var udp = new UdpClient(DiscoveryPort);
-            udp.EnableBroadcast = true;
-            Console.ForegroundColor = ConsoleColor.DarkCyan;
-            Console.WriteLine($"[DISCOVERY] UDP listener started on port {DiscoveryPort}");
-            Console.ResetColor();
-
-            // Determine the best local IPv4 to advertise
-            string advertisedIp = GetLocalIPv4Addresses().FirstOrDefault().Address ?? "127.0.0.1";
-
-            while (!cancellationToken.IsCancellationRequested)
+            UdpClient? udp = null;
+            try
             {
-                try
+                udp = new UdpClient();
+                udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                udp.Client.Bind(new IPEndPoint(IPAddress.Any, DiscoveryPort));
+                udp.EnableBroadcast = true;
+
+                Console.ForegroundColor = ConsoleColor.DarkCyan;
+                Console.WriteLine($"[DISCOVERY] UDP listener started on port {DiscoveryPort}");
+                Console.ResetColor();
+
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    var result = await udp.ReceiveAsync(cancellationToken);
-                    var message = Encoding.UTF8.GetString(result.Buffer);
-
-                    if (!string.Equals(message.Trim(), DiscoveryProbe, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    Console.WriteLine($"[DISCOVERY] Probe from {result.RemoteEndPoint}");
-
-                    var response = JsonSerializer.Serialize(new
+                    try
                     {
-                        ServerName,
-                        Ip = advertisedIp,
-                        Port = ChatPort,
-                        OnlineCount = _clients.UserCount
-                    });
+                        var result = await udp.ReceiveAsync(cancellationToken);
+                        var message = Encoding.UTF8.GetString(result.Buffer);
 
-                    var bytes = Encoding.UTF8.GetBytes(response);
-                    await udp.SendAsync(bytes, bytes.Length, result.RemoteEndPoint);
+                        if (!string.Equals(message.Trim(), DiscoveryProbe, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        Console.WriteLine($"[DISCOVERY] Probe from {result.RemoteEndPoint}");
+
+                        var response = JsonSerializer.Serialize(new
+                        {
+                            HostName = Environment.MachineName,
+                            Port = ChatPort,
+                            OnlineCount = _clients.UserCount,
+                            ServerVersion = "1.0"
+                        });
+
+                        var bytes = Encoding.UTF8.GetBytes(response);
+                        await udp.SendAsync(bytes, bytes.Length, result.RemoteEndPoint);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[DISCOVERY] Error: {ex.Message}");
+                    }
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[DISCOVERY] Error: {ex.Message}");
-                }
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[DISCOVERY] Failed to start UDP listener: {ex.Message}");
+                Console.ResetColor();
+            }
+            finally
+            {
+                udp?.Dispose();
             }
 
             Console.WriteLine("[DISCOVERY] UDP listener stopped");

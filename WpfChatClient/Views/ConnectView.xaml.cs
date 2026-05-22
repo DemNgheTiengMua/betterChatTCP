@@ -1,4 +1,6 @@
 using System.Windows.Controls;
+using System.Windows.Input;
+using WpfChatClient.ViewModels;
 
 namespace WpfChatClient.Views
 {
@@ -7,6 +9,14 @@ namespace WpfChatClient.Views
         public ConnectView()
         {
             InitializeComponent();
+        }
+
+        private void AvatarBorder_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (DataContext is ConnectViewModel vm)
+            {
+                vm.PickAvatarCommand.Execute(null);
+            }
         }
     }
 }

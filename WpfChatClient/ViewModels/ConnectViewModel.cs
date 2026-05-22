@@ -1,231 +1,165 @@
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
-using CommunityToolkit.Mvvm.Messaging;
-using WpfChatClient.Core.Interfaces;
-using WpfChatClient.Core.Models;
-using WpfChatClient.Messages;
-using Microsoft.Win32;
 using System;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
+using Microsoft.Win32;
+using WpfChatClient.Core.Interfaces;
+using WpfChatClient.Messages;
+using WpfChatClient.Models;
+using WpfChatClient.Services;
 
 namespace WpfChatClient.ViewModels;
-
-public enum ConnectPhase
-{
-    Scanning,       // Auto-scanning in progress
-    ServerList,     // Showing list of found servers (may be empty)
-    ManualEntry,    // User wants to type IP manually
-    Connecting,     // Attempting TCP connection
-}
 
 public partial class ConnectViewModel : ObservableObject
 {
     private readonly IChatService _chatService;
+    private readonly ServerDiscoveryService _discoveryService;
+    private readonly ServerHostService _hostService;
     private CancellationTokenSource? _scanCts;
 
-    // ──────────────────────────────────────────────
-    // Phase / State
-    // ──────────────────────────────────────────────
+    // ---- Phase management ----
+    // "Scanning", "ServerList", "NoServers", "ManualConnect"
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsScanning))]
-    [NotifyPropertyChangedFor(nameof(IsServerListPhase))]
-    [NotifyPropertyChangedFor(nameof(IsManualPhase))]
-    [NotifyPropertyChangedFor(nameof(IsConnecting))]
-    private ConnectPhase _phase = ConnectPhase.Scanning;
-
-    public bool IsScanning => Phase == ConnectPhase.Scanning;
-    public bool IsServerListPhase => Phase == ConnectPhase.ServerList;
-    public bool IsManualPhase => Phase == ConnectPhase.ManualEntry;
-    public bool IsConnecting => Phase == ConnectPhase.Connecting;
-
-    // ──────────────────────────────────────────────
-    // Server list
-    // ──────────────────────────────────────────────
-    public ObservableCollection<ServerInfo> Servers { get; } = new();
+    private string _currentPhase = "Scanning";
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(ConnectToSelectedCommand))]
-    private ServerInfo? _selectedServer;
-
-    // ──────────────────────────────────────────────
-    // Manual entry fields
-    // ──────────────────────────────────────────────
-    [ObservableProperty]
-    private string _manualIp = string.Empty;
+    private string _ip = "127.0.0.1";
 
     [ObservableProperty]
-    private string _manualPort = "5000";
-
-    // ──────────────────────────────────────────────
-    // Shared fields
-    // ──────────────────────────────────────────────
-    [ObservableProperty]
-    private string _username = string.Empty;
+    private string _username = "";
 
     [ObservableProperty]
-    private string _errorMessage = string.Empty;
+    private string _errorMessage = "";
 
     [ObservableProperty]
-    private string _statusMessage = "Scanning your network for servers…";
+    private string _scanStatus = "Scanning for servers on your network...";
 
-    // ──────────────────────────────────────────────
-    // Avatar
-    // ──────────────────────────────────────────────
+    [ObservableProperty]
+    private bool _isScanning;
+
+    [ObservableProperty]
+    private bool _isConnecting;
+
+    [ObservableProperty]
+    private DiscoveredServer? _selectedServer;
+
+    // ---- Avatar ----
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasAvatar))]
     private string? _avatarPath;
 
     public bool HasAvatar => !string.IsNullOrWhiteSpace(AvatarPath) && File.Exists(AvatarPath);
 
-    // ──────────────────────────────────────────────
-    // Constructor
-    // ──────────────────────────────────────────────
-    public ConnectViewModel(IChatService chatService)
+    public ObservableCollection<DiscoveredServer> DiscoveredServers { get; } = new();
+
+    public ConnectViewModel(IChatService chatService, ServerDiscoveryService discoveryService, ServerHostService hostService)
     {
         _chatService = chatService;
-        // Start scanning automatically when the view model is created
-        _ = StartScanAsync();
+        _discoveryService = discoveryService;
+        _hostService = hostService;
+
+        // Auto-scan on construction
+        _ = ScanForServersAsync();
     }
 
-    // ──────────────────────────────────────────────
-    // Commands
-    // ──────────────────────────────────────────────
-
-    /// <summary>Re-run the auto-scanner.</summary>
     [RelayCommand]
-    private async Task RescanAsync()
+    private async Task ScanForServersAsync()
     {
         _scanCts?.Cancel();
-        Servers.Clear();
-        SelectedServer = null;
-        Phase = ConnectPhase.Scanning;
-        StatusMessage = "Scanning your network for servers…";
-        ErrorMessage = string.Empty;
-        await StartScanAsync();
-    }
-
-    /// <summary>Connect to the currently selected server from the list.</summary>
-    [RelayCommand(CanExecute = nameof(CanConnectToSelected))]
-    private async Task ConnectToSelectedAsync()
-    {
-        if (SelectedServer == null) return;
-        await DoConnectAsync(SelectedServer.Ip, SelectedServer.Port);
-    }
-
-    private bool CanConnectToSelected() => SelectedServer != null;
-
-    /// <summary>Switch to manual IP entry form.</summary>
-    [RelayCommand]
-    private void EnterManually()
-    {
-        ErrorMessage = string.Empty;
-        Phase = ConnectPhase.ManualEntry;
-    }
-
-    /// <summary>Go back to the server list from manual entry.</summary>
-    [RelayCommand]
-    private void BackToList()
-    {
-        ErrorMessage = string.Empty;
-        Phase = ConnectPhase.ServerList;
-    }
-
-    /// <summary>Connect using the manually entered IP / port.</summary>
-    [RelayCommand]
-    private async Task ConnectManuallyAsync()
-    {
-        if (string.IsNullOrWhiteSpace(ManualIp))
-        {
-            ErrorMessage = "Please enter a server IP address.";
-            return;
-        }
-
-        if (!int.TryParse(ManualPort, out int port) || port < 1 || port > 65535)
-        {
-            ErrorMessage = "Port must be a number between 1 and 65535.";
-            return;
-        }
-
-        await DoConnectAsync(ManualIp.Trim(), port);
-    }
-
-    /// <summary>Open a file picker for avatar selection.</summary>
-    [RelayCommand]
-    private void PickAvatar()
-    {
-        var dlg = new OpenFileDialog
-        {
-            Title = "Choose your avatar",
-            Filter = "Images (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp)|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp",
-            Multiselect = false
-        };
-
-        if (dlg.ShowDialog() == true)
-        {
-            AvatarPath = dlg.FileName;
-        }
-    }
-
-    /// <summary>Clear the chosen avatar.</summary>
-    [RelayCommand]
-    private void ClearAvatar()
-    {
-        AvatarPath = null;
-    }
-
-    // ──────────────────────────────────────────────
-    // Internal helpers
-    // ──────────────────────────────────────────────
-
-    private async Task StartScanAsync()
-    {
         _scanCts = new CancellationTokenSource();
+
+        IsScanning = true;
+        CurrentPhase = "Scanning";
+        ScanStatus = "Scanning for servers on your network...";
+        ErrorMessage = "";
+        DiscoveredServers.Clear();
 
         try
         {
-            var servers = await Services.ServerDiscoveryService.ScanAsync(_scanCts.Token);
+            var servers = await _discoveryService.ScanForServersAsync(
+                TimeSpan.FromSeconds(3),
+                _scanCts.Token);
 
-            Application.Current.Dispatcher.Invoke(() =>
+            if (_scanCts.IsCancellationRequested) return;
+
+            if (servers.Count > 0)
             {
-                Servers.Clear();
-                foreach (var s in servers)
-                    Servers.Add(s);
-
-                if (Servers.Count > 0)
+                foreach (var server in servers)
                 {
-                    SelectedServer = Servers[0];
-                    StatusMessage = $"Found {Servers.Count} server{(Servers.Count == 1 ? "" : "s")} on your network.";
-                }
-                else
-                {
-                    StatusMessage = "No servers found on your network.";
+                    DiscoveredServers.Add(server);
                 }
 
-                Phase = ConnectPhase.ServerList;
-            });
+                SelectedServer = DiscoveredServers.First();
+                CurrentPhase = "ServerList";
+            }
+            else
+            {
+                CurrentPhase = "NoServers";
+            }
         }
         catch (OperationCanceledException)
         {
-            // Scan was cancelled (e.g. user hit Rescan); ignore
+            // Scan was cancelled
         }
         catch (Exception ex)
         {
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                StatusMessage = "Scan failed. You can enter an IP manually.";
-                ErrorMessage = ex.Message;
-                Phase = ConnectPhase.ServerList;
-            });
+            Console.WriteLine($"[SCAN] Error: {ex.Message}");
+            CurrentPhase = "NoServers";
+        }
+        finally
+        {
+            IsScanning = false;
         }
     }
 
-    private async Task DoConnectAsync(string ip, int port)
+    [RelayCommand]
+    private void ShowManualConnect()
     {
-        ErrorMessage = string.Empty;
+        CurrentPhase = "ManualConnect";
+        ErrorMessage = "";
+    }
+
+    [RelayCommand]
+    private void BackToScan()
+    {
+        ErrorMessage = "";
+        _ = ScanForServersAsync();
+    }
+
+    [RelayCommand]
+    private async Task HostServer()
+    {
+        ErrorMessage = "";
+
+        if (_hostService.TryStartServer(out var error))
+        {
+            ScanStatus = "Starting server... waiting for it to come online.";
+            IsScanning = true;
+            CurrentPhase = "Scanning";
+
+            // Wait a moment for the server to start, then scan
+            await Task.Delay(2000);
+            await ScanForServersAsync();
+        }
+        else
+        {
+            ErrorMessage = error;
+        }
+    }
+
+    [RelayCommand]
+    private async Task ConnectToSelected()
+    {
+        if (SelectedServer == null)
+        {
+            ErrorMessage = "Please select a server.";
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(Username))
         {
@@ -233,35 +167,103 @@ public partial class ConnectViewModel : ObservableObject
             return;
         }
 
-        Phase = ConnectPhase.Connecting;
-        StatusMessage = $"Connecting to {ip}:{port}…";
+        await DoConnect(SelectedServer.IpAddress, SelectedServer.Port);
+    }
 
+    [RelayCommand]
+    private async Task Connect()
+    {
+        if (string.IsNullOrWhiteSpace(Username))
+        {
+            ErrorMessage = "Username is required.";
+            return;
+        }
+
+        var serverIp = string.IsNullOrWhiteSpace(Ip) ? "127.0.0.1" : Ip.Trim();
+
+        await DoConnect(serverIp, 5000);
+    }
+
+    private async Task DoConnect(string ip, int port)
+    {
         try
         {
+            ErrorMessage = "";
+            IsConnecting = true;
+
+            // Save avatar locally before connecting
+            SaveAvatarLocally();
+
             await _chatService.ConnectAsync(ip, port, Username.Trim());
 
-            // Signal successful connection — MainViewModel will switch the view
+            // Signal successful connection (with Username and AvatarPath)
             WeakReferenceMessenger.Default.Send(new ConnectionSuccessMessage(Username.Trim(), AvatarPath));
         }
         catch (System.Net.Sockets.SocketException)
         {
-            ErrorMessage = "Cannot connect. Check the server IP, your Wi-Fi, and that ChatServer is running.";
-            Phase = ConnectPhase.ServerList;
+            ErrorMessage = "Cannot connect. Check server IP, Wi-Fi, firewall, and that ChatServer is running.";
         }
         catch (TimeoutException)
         {
-            ErrorMessage = "Connection timed out. Make sure you're on the same Wi-Fi network.";
-            Phase = ConnectPhase.ServerList;
+            ErrorMessage = "Connection timed out. Check the host IP and Wi-Fi network.";
         }
         catch (InvalidOperationException ex)
         {
             ErrorMessage = ex.Message;
-            Phase = ConnectPhase.ServerList;
         }
         catch (Exception ex)
         {
             ErrorMessage = $"Connection failed: {ex.Message}";
-            Phase = ConnectPhase.ServerList;
+        }
+        finally
+        {
+            IsConnecting = false;
+        }
+    }
+
+    [RelayCommand]
+    private void PickAvatar()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Select Avatar Image",
+            Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|All Files|*.*",
+            CheckFileExists = true
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            AvatarPath = dialog.FileName;
+        }
+    }
+
+    [RelayCommand]
+    private void RemoveAvatar()
+    {
+        AvatarPath = null;
+    }
+
+    private void SaveAvatarLocally()
+    {
+        if (string.IsNullOrWhiteSpace(AvatarPath) || !File.Exists(AvatarPath))
+            return;
+
+        try
+        {
+            var avatarDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ChatTCP", "Avatars");
+            Directory.CreateDirectory(avatarDir);
+
+            var ext = Path.GetExtension(AvatarPath);
+            var destPath = Path.Combine(avatarDir, $"{Username.Trim()}{ext}");
+            File.Copy(AvatarPath, destPath, overwrite: true);
+            AvatarPath = destPath;
+            Console.WriteLine($"[AVATAR] Saved avatar to {destPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[AVATAR] Save failed: {ex.Message}");
         }
     }
 }

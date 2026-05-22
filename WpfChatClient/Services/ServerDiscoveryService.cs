@@ -6,88 +6,107 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using WpfChatClient.Core.Models;
+using WpfChatClient.Models;
 
 namespace WpfChatClient.Services;
 
-/// <summary>
-/// Discovers chat servers on the local network using UDP broadcast probes.
-/// The server listens on <see cref="DiscoveryPort"/> and replies with a <see cref="ServerDiscoveryResponse"/>.
-/// </summary>
+public class DiscoveryResponse
+{
+    public string HostName { get; set; } = string.Empty;
+    public int Port { get; set; }
+    public int OnlineCount { get; set; }
+    public string ServerVersion { get; set; } = "1.0";
+}
+
 public class ServerDiscoveryService
 {
-    public const int DiscoveryPort = 5002;
-    private const string ProbeMessage = "CHAT_DISCOVER_V1";
-    private static readonly TimeSpan ScanTimeout = TimeSpan.FromSeconds(3);
+    private const int DiscoveryPort = 5001;
+    private const string DiscoveryProbe = "CHATTCP_DISCOVER";
 
     /// <summary>
-    /// Broadcasts a UDP probe and returns all responding servers within the scan timeout.
+    /// Scans the LAN for chat servers by sending a UDP broadcast probe.
+    /// Returns a list of discovered servers within the timeout period.
     /// </summary>
-    public static async Task<List<ServerInfo>> ScanAsync(CancellationToken cancellationToken = default)
+    public async Task<List<DiscoveredServer>> ScanForServersAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
-        var results = new List<ServerInfo>();
+        var servers = new List<DiscoveredServer>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        using var udp = new UdpClient();
-        udp.EnableBroadcast = true;
-        udp.Client.ReceiveTimeout = (int)ScanTimeout.TotalMilliseconds;
-
-        var probeBytes = Encoding.UTF8.GetBytes(ProbeMessage);
-        var broadcastEp = new IPEndPoint(IPAddress.Broadcast, DiscoveryPort);
+        UdpClient? udpClient = null;
 
         try
-        {
-            await udp.SendAsync(probeBytes, probeBytes.Length, broadcastEp).ConfigureAwait(false);
-            Console.WriteLine($"[DISCOVERY] Probe sent to {broadcastEp}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DISCOVERY] Failed to send probe: {ex.Message}");
-            return results;
-        }
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(ScanTimeout);
-
-        while (!timeoutCts.Token.IsCancellationRequested)
-        {
-            try
-            {
-                var receiveTask = udp.ReceiveAsync(timeoutCts.Token);
-                var result = await receiveTask.ConfigureAwait(false);
-                var json = Encoding.UTF8.GetString(result.Buffer);
-                var response = JsonSerializer.Deserialize<ServerDiscoveryResponse>(json);
-
-                if (response != null && !string.IsNullOrWhiteSpace(response.Ip))
-                {
-                    var key = $"{response.Ip}:{response.Port}";
-                    if (seen.Add(key))
-                    {
-                        results.Add(new ServerInfo
-                        {
-                            DisplayName = response.ServerName ?? response.Ip,
-                            Ip = response.Ip,
-                            Port = response.Port,
-                            OnlineCount = response.OnlineCount
-                        });
-                        Console.WriteLine($"[DISCOVERY] Found server: {key} ({response.ServerName})");
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (SocketException)
-            {
-                break; // receive timeout or socket error
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DISCOVERY] Error receiving response: {ex.Message}");
-            }
-        }
-
-        return results;
-    }
+         {
+             udpClient = new UdpClient();
+             udpClient.EnableBroadcast = true;
+             udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+ 
+             // Send discovery probe as broadcast
+             var probeBytes = Encoding.UTF8.GetBytes(DiscoveryProbe);
+             await udpClient.SendAsync(probeBytes, probeBytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort));
+ 
+             // Also try sending to localhost for same-machine servers
+             try
+             {
+                 await udpClient.SendAsync(probeBytes, probeBytes.Length, new IPEndPoint(IPAddress.Loopback, DiscoveryPort));
+             }
+             catch
+             {
+                 // Ignore - broadcast should already cover localhost on most systems
+             }
+ 
+             // Collect responses until timeout
+             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+             timeoutCts.CancelAfter(timeout);
+ 
+             while (!timeoutCts.Token.IsCancellationRequested)
+             {
+                 try
+                 {
+                     var receiveTask = udpClient.ReceiveAsync(timeoutCts.Token);
+                     var result = await receiveTask;
+ 
+                     var responseJson = Encoding.UTF8.GetString(result.Buffer);
+                     var response = JsonSerializer.Deserialize<DiscoveryResponse>(responseJson);
+ 
+                     if (response != null)
+                     {
+                         var key = $"{result.RemoteEndPoint.Address}:{response.Port}";
+                         if (seen.Add(key))
+                         {
+                             servers.Add(new DiscoveredServer
+                             {
+                                 HostName = response.HostName,
+                                 IpAddress = result.RemoteEndPoint.Address.ToString(),
+                                 Port = response.Port,
+                                 OnlineCount = response.OnlineCount,
+                                 ServerVersion = response.ServerVersion
+                             });
+                         }
+                     }
+                 }
+                 catch (OperationCanceledException)
+                 {
+                     break;
+                 }
+                 catch (SocketException)
+                 {
+                     // Timeout or network error — stop listening
+                     break;
+                 }
+                 catch (Exception ex)
+                 {
+                     Console.WriteLine($"[DISCOVERY] Parse error: {ex.Message}");
+                 }
+             }
+         }
+         catch (Exception ex)
+         {
+             Console.WriteLine($"[DISCOVERY] Scan failed: {ex.Message}");
+         }
+         finally
+         {
+             udpClient?.Dispose();
+         }
+ 
+         return servers;
+     }
 }
